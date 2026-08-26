@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f5f7" />
+    <meta name="description" content="FastLab 本地任务台" />
+    <title>FastLab</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="任务导航">
+        <header class="brand">
+          <button class="brand-mark" type="button" data-action="home" aria-label="返回首页">FL</button>
+          <div>
+            <h1>FastLab</h1>
+          </div>
+        </header>
+
+        <button class="new-task-button" type="button" data-action="new-task">
+          <span aria-hidden="true">＋</span>
+          创建任务
+        </button>
+
+        <button class="mobile-settings-button" type="button" data-action="settings">
+          设置
+        </button>
+
+        <div class="sidebar-section-heading">
+          <span>任务</span>
+          <span class="task-count" id="task-count">0</span>
+        </div>
+        <nav class="task-list" id="task-list" aria-label="任务列表"></nav>
+
+        <button class="settings-button" type="button" data-action="settings">
+          <span aria-hidden="true">⚙︎</span>
+          设置
+        </button>
+
+        <footer class="local-status">
+          <span class="pulse-dot" aria-hidden="true"></span>
+          <div>
+            <strong>仓库</strong>
+            <span id="workspace-label">加载中…</span>
+          </div>
+        </footer>
+      </aside>
+
+      <main class="main-content" id="main-content" tabindex="-1">
+        <section class="loading-state" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div>
+          <p>加载中…</p>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

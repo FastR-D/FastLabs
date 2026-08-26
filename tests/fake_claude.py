@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Small Claude Code stream-json double used by adapter tests."""
+
+import json
+import re
+import sys
+import uuid
+from pathlib import Path
+
+
+def emit(payload):
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def main():
+    arguments = sys.argv[1:]
+    prompt = sys.stdin.read()
+    if "--mcp-config" in arguments:
+        config = json.loads(arguments[arguments.index("--mcp-config") + 1])
+        if not isinstance(config.get("mcpServers"), dict):
+            print("Error: Invalid MCP configuration:", flush=True)
+            print("mcpServers: Invalid input: expected record, received undefined", flush=True)
+            return 1
+    if "FAIL_PLAIN" in prompt:
+        print("Error: fake Claude startup failed", flush=True)
+        return 1
+    resume = None
+    model = "fake-claude"
+    if "--resume" in arguments:
+        resume = arguments[arguments.index("--resume") + 1]
+    if "--model" in arguments:
+        model = arguments[arguments.index("--model") + 1]
+    session_id = resume or "claude-" + uuid.uuid4().hex[:12]
+    settings = None
+    if "--settings" in arguments:
+        settings = json.loads(arguments[arguments.index("--settings") + 1])
+    emit({
+        "type": "system", "subtype": "init", "session_id": session_id,
+        "model": model,
+        "permissionMode": arguments[arguments.index("--permission-mode") + 1]
+        if "--permission-mode" in arguments else "acceptEdits",
+        "tools": arguments[arguments.index("--tools") + 1]
+        if "--tools" in arguments else "default",
+        "allowedTools": arguments[arguments.index("--allowedTools") + 1]
+        if "--allowedTools" in arguments else "",
+        "dangerousBypass": (
+            "--dangerously-skip-permissions" in arguments
+            or "bypassPermissions" in arguments
+        ),
+        "settings": settings,
+    })
+    if "DENY_COMMAND" in prompt:
+        emit({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "Command was not executed.", "session_id": session_id,
+            "permission_denials": [{
+                "tool_name": "Bash",
+                "tool_input": {"command": "npm run build"},
+            }],
+        })
+        return 0
+    if "INSUFFICIENT_BALANCE" in prompt:
+        emit({
+            "type": "assistant", "session_id": session_id,
+            "message": {"content": [{
+                "type": "tool_use", "name": "Read", "input": {"file_path": "README.md"},
+            }]},
+        })
+        emit({
+            "type": "user", "session_id": session_id,
+            "message": {"role": "user", "content": [{
+                "type": "tool_result", "content": "README contents",
+            }]},
+        })
+        emit({
+            "type": "assistant", "session_id": session_id,
+            "message": {"content": [{
+                "type": "text", "text": "API Error: 402 Insufficient Balance",
+            }]},
+        })
+        emit({
+            "type": "result", "subtype": "success", "is_error": True,
+            "api_error_status": 402,
+            "result": "API Error: 402 Insufficient Balance",
+            "structured_output": {"passed": True, "summary": "incomplete"},
+            "session_id": session_id,
+            "permission_denials": [{
+                "tool_name": "Bash", "tool_input": {"command": "python tests.py"},
+            }],
+        })
+        return 1
+    schema = None
+    if "--json-schema" in arguments:
+        schema = json.loads(arguments[arguments.index("--json-schema") + 1])
+    properties = (schema or {}).get("properties", {})
+    if "subtasks" in properties:
+        result = {
+            "title": "Claude 规划任务",
+            "summary": "Claude 只读生成的结构化计划。",
+            "subtasks": [{
+                "key": "S1", "title": "由 Claude 执行", "instructions": "创建结果文件。",
+                "weight": 1, "dependencies": [], "executor": "claude",
+            }],
+            "acceptance": [{"id": "A1", "criterion": "结果文件存在。"}],
+        }
+        emit({
+            "type": "result", "subtype": "success", "is_error": False,
+            "structured_output": result, "session_id": session_id,
+        })
+        return 0
+    if "results" in properties:
+        result = {
+            "passed": True, "summary": "验收通过。",
+            "results": [{"id": "A1", "status": "passed", "evidence": "结果存在。"}],
+        }
+        emit({
+            "type": "result", "subtype": "success", "is_error": False,
+            "structured_output": result, "session_id": session_id,
+        })
+        return 0
+    match = re.search(r"子任务 ID：?(S\d+)", prompt)
+    key = match.group(1) if match else "S1"
+    destination = Path.cwd()
+    scope_match = re.search(r"^允许写入范围：(.+)$", prompt, re.MULTILINE)
+    if scope_match and scope_match.group(1).strip() != "整个仓库":
+        destination /= scope_match.group(1).strip().removesuffix("/**")
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / ("claude-%s.txt" % key)).write_text(
+        "generated by fake Claude\n", encoding="utf-8"
+    )
+    emit({
+        "type": "assistant", "session_id": session_id,
+        "message": {"content": [{"type": "text", "text": "implemented %s" % key}]},
+    })
+    emit({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": json.dumps({"ok": True, "subtask": key}),
+        "session_id": session_id,
+    })
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

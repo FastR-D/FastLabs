@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["passed", "summary", "results"],
+  "properties": {
+    "passed": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "evidence"],
+        "properties": {
+          "id": {"type": "string"},
+          "status": {"type": "string", "enum": ["passed", "failed", "unclear"]},
+          "evidence": {"type": "string"}
+        }
+      }
+    }
+  }
+}
+

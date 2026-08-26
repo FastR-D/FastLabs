@@ -1,0 +1,9 @@
+.DS_Store
+.agents/
+__pycache__/
+*.py[cod]
+.fastlab/
+.venv/
+.coverage
+plan.md
+tips.md
