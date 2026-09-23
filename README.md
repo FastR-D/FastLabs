@@ -52,3 +52,9 @@ python -m unittest discover -s tests -v
 ```
 
 运行数据和本机凭证保存在 `.fastlab/`，不要提交。
+
+## 可选 FastCAS 身份关联
+
+在 FastCAS 注册公开的 `device_code` 客户端，允许 `openid profile` scope；在 `.fastlab/fastlab.env` 填入 `FASTLAB_FASTCAS_ISSUER`、`FASTLAB_FASTCAS_CLIENT_ID`，安装可选 Python SDK `pip install -e ../FastCAS/sdk/python`。本机 HTTP 开发服务使用环回 FastCAS 时，还需 `FASTLAB_FASTCAS_ALLOW_LOOPBACK_HTTP=true`。打开“设置 → FastCAS 关联”，核对浏览器和本机显示的设备代码，完成 FastCAS 授权后在本机再次确认身份。
+
+安装 ID 持久保存在本机数据库，关联记录是 FastCAS issuer、subject 和最近验证时间；设备令牌不存入任务或执行器，关联本身不能启动任务、访问仓库或绕过飞书白名单。解除关联只移除此身份映射，不删任务和 Worktree。FastCAS 未配置或离线时，本机任务仍可使用。当前关联记录仅保存在本机；中心侧安装清单和跨项目授权尚待实现。

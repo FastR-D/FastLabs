@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import signal
 import sqlite3
@@ -35,6 +36,7 @@ from agent_adapter import (
 )
 from feishu_gateway import FeishuGateway
 from feishu_help import help_payload as feishu_help_payload
+from fastcas_pairing import FastCASPairing
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -65,6 +67,9 @@ LOCAL_ENV_KEYS = {
     "FASTLAB_CLAUDE_BIN",
     "FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS",
     "FASTLAB_AGENT_TIMEOUT",
+    "FASTLAB_FASTCAS_ISSUER",
+    "FASTLAB_FASTCAS_CLIENT_ID",
+    "FASTLAB_FASTCAS_ALLOW_LOOPBACK_HTTP",
 }
 DEFAULT_GLOBAL_CONCURRENCY = 4
 MAX_GLOBAL_CONCURRENCY = 32
@@ -932,6 +937,7 @@ class FastLab:
         self.data_dir = Path(data_dir or APP_ROOT / ".fastlab").expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.data_dir / "fastlab.db")
+        self.fastcas_pairing = FastCASPairing(self.store)
         default_feishu_conversation = os.environ.get("FASTLAB_FEISHU_DEFAULT_CHAT_ID", "").strip()
         if default_feishu_conversation:
             self.store.set_setting("feishu.defaultConversation", default_feishu_conversation)
@@ -3693,9 +3699,42 @@ class FastLabHandler(BaseHTTPRequestHandler):
     app = None
     server_version = "FastLab/0.1"
 
+    def local_http_boundary(self, mutation=False):
+        from http.cookies import SimpleCookie
+        host = self.headers.get("Host", "")
+        try:
+            parsed = urlparse("http://" + host)
+            valid_host = (parsed.hostname in {"127.0.0.1", "localhost", "::1"} and
+                          parsed.port == self.server.server_port and not parsed.username and not parsed.password)
+        except ValueError:
+            valid_host = False
+        if not valid_host:
+            self.json_response(403, {"error": "仅允许本机 Host 访问 FastLab。"})
+            return False
+        if mutation:
+            cookies = SimpleCookie()
+            try:
+                cookies.load(self.headers.get("Cookie", ""))
+                cookie_value = cookies.get("fastlab_csrf")
+            except Exception:
+                cookie_value = None
+            expected = self.app.fastcas_pairing.csrf
+            if (self.headers.get("Origin") != "http://" + host or not cookie_value or
+                not secrets.compare_digest(cookie_value.value, expected) or
+                not secrets.compare_digest(self.headers.get("X-CSRF-Token", ""), expected)):
+                self.json_response(403, {"error": "请求来源或本机确认码无效。"})
+                return False
+        return True
+
     def do_GET(self):
         try:
+            if not self.local_http_boundary():
+                return
             path = unquote(urlparse(self.path).path)
+            if path == "/api/fastcas/status":
+                result = self.app.fastcas_pairing.status()
+                result["csrf"] = self.app.fastcas_pairing.csrf
+                return self.json_response(200, result, cookie="fastlab_csrf=" + self.app.fastcas_pairing.csrf + "; HttpOnly; SameSite=Strict; Path=/api")
             if path == "/api/health":
                 return self.json_response(200, self.app.health_payload())
             if path == "/api/repositories":
@@ -3719,8 +3758,21 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if not self.local_http_boundary(mutation=True):
+                return
             path = unquote(urlparse(self.path).path)
             body = self.read_json()
+            if path.startswith("/api/fastcas/"):
+                pairing = self.app.fastcas_pairing
+                if path == "/api/fastcas/pair":
+                    return self.json_response(200, pairing.start())
+                if path == "/api/fastcas/poll":
+                    return self.json_response(200, pairing.poll())
+                if path == "/api/fastcas/confirm":
+                    return self.json_response(200, pairing.confirm())
+                if path == "/api/fastcas/unlink":
+                    return self.json_response(200, pairing.unlink())
+                return self.json_response(404, {"error": "接口不存在。"})
             if path == "/api/tasks":
                 task = self.app.create_task(
                     body.get("title"),
@@ -3802,6 +3854,8 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         try:
+            if not self.local_http_boundary(mutation=True):
+                return
             path = unquote(urlparse(self.path).path)
             body = self.read_json()
             if path == "/api/settings/executors":
@@ -3843,6 +3897,8 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         try:
+            if not self.local_http_boundary(mutation=True):
+                return
             path = unquote(urlparse(self.path).path)
             match = re.fullmatch(r"/api/tasks/([a-f0-9]+)/events", path)
             if match:
@@ -3870,12 +3926,14 @@ class FastLabHandler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
-    def json_response(self, status, payload):
+    def json_response(self, status, payload, cookie=None):
         encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(encoded)
 

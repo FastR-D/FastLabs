@@ -9,7 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, build_opener, HTTPCookieProcessor
+from http.cookiejar import CookieJar
 
 from agent_adapter import (
     ClaudeCLIAdapter, ClaudePlanner, CodexCLIAdapter, CodexPlanner,
@@ -849,44 +850,47 @@ class FastLabIntegrationTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         origin = "http://127.0.0.1:%s" % server.server_address[1]
+        opener = build_opener(HTTPCookieProcessor(CookieJar()))
         try:
-            settings = json.loads(urlopen(origin + "/api/settings/executors").read())
+            csrf_token = json.loads(opener.open(origin + "/api/fastcas/status").read())["csrf"]
+            protected = {"Content-Type": "application/json", "Origin": origin, "X-CSRF-Token": csrf_token}
+            settings = json.loads(opener.open(origin + "/api/settings/executors").read())
             self.assertEqual({item["id"] for item in settings["executors"]}, {"codex", "claude"})
             for path in (
                 "/api/settings/agents", "/api/settings/codex", "/api/settings/models",
                 "/api/skills",
             ):
                 with self.assertRaises(HTTPError) as error:
-                    urlopen(origin + path)
+                    opener.open(origin + path)
                 self.assertEqual(error.exception.code, 404)
             request = Request(
                 origin + "/api/tasks",
                 data=json.dumps({"goal": "Create through HTTP", "maxConcurrency": 2}).encode(),
-                headers={"Content-Type": "application/json"}, method="POST",
+                headers=protected, method="POST",
             )
-            created = json.loads(urlopen(request).read())
+            created = json.loads(opener.open(request).read())
             planned = self.wait_for_status(created["id"], "awaiting_approval")
             self.assertTrue(all(item["executor"] for item in planned["subtasks"]))
 
             self.app.store.update_task(created["id"], status="cancelled")
             rerun_request = Request(
                 origin + "/api/tasks/%s/rerun" % created["id"],
-                data=b"{}", headers={"Content-Type": "application/json"}, method="POST",
+                data=b"{}", headers=protected, method="POST",
             )
-            rerun = json.loads(urlopen(rerun_request).read())
+            rerun = json.loads(opener.open(rerun_request).read())
             self.wait_for_status(rerun["id"], "awaiting_approval")
 
             clear_request = Request(
-                origin + "/api/tasks/%s/events" % created["id"], method="DELETE",
+                origin + "/api/tasks/%s/events" % created["id"], headers=protected, method="DELETE",
             )
-            self.assertTrue(json.loads(urlopen(clear_request).read())["ok"])
+            self.assertTrue(json.loads(opener.open(clear_request).read())["ok"])
             self.assertEqual(self.app.task_payload(created["id"])["events"], [])
 
             for task_id in (created["id"], rerun["id"]):
                 delete_request = Request(
-                    origin + "/api/tasks/%s" % task_id, method="DELETE",
+                    origin + "/api/tasks/%s" % task_id, headers=protected, method="DELETE",
                 )
-                self.assertTrue(json.loads(urlopen(delete_request).read())["ok"])
+                self.assertTrue(json.loads(opener.open(delete_request).read())["ok"])
                 self.assertIsNone(self.app.store.get_task(task_id))
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=2)

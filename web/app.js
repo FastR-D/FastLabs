@@ -1,5 +1,5 @@
 const state = {
-  tasks: [], repositories: [], settings: null, health: null,
+  tasks: [], repositories: [], settings: null, health: null, fastcas: null, pairPollDue: 0,
   page: "home", selectedTaskId: null, timer: null, mainDirty: false,
   renderVersion: 0, taskViews: {},
 };
@@ -45,8 +45,8 @@ function logPresentation(event) {
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
+    headers: { "Content-Type": "application/json", ...(options.method && options.method !== "GET" && state.fastcas?.csrf ? { "X-CSRF-Token": state.fastcas.csrf } : {}), ...(options.headers || {}) },
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -64,6 +64,10 @@ function toast(message, type = "info") {
   node.textContent = message;
   document.querySelector("#toast-region").append(node);
   setTimeout(() => node.remove(), 3600);
+}
+
+function fastcasAction(action) {
+  return api(`/api/fastcas/${action}`, { method: "POST", body: "{}", headers: { "X-CSRF-Token": state.fastcas?.csrf || "" } });
 }
 
 function executorOptions(selected = "") {
@@ -340,6 +344,7 @@ function renderSettings() {
         <div class="executor-list">${(state.settings?.executors || []).map((item) => `<div class="executor-row"><div class="executor-copy"><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.kind)}</p>${item.error ? `<span class="repository-error">${escapeHtml(item.error)}</span>` : ""}</div><span class="availability-badge ${item.available ? "" : "offline"}">${item.available ? "可用" : "不可用"}</span></div>`).join("")}</div>
       </article>
       <article class="panel"><header class="panel-header"><h3>飞书</h3><span>${feishu.connected ? "已连接" : feishu.configured ? "连接异常" : "未配置"}</span></header>${feishu.error ? `<div class="settings-body"><p>${escapeHtml(feishu.error)}</p></div>` : ""}</article>
+      <article class="panel"><header class="panel-header"><h3>FastCAS 关联</h3><span>${state.fastcas?.link ? "已关联" : state.fastcas?.available ? "可关联" : "未配置"}</span></header><div class="settings-body"><p>本机安装 ID：<code>${escapeHtml(state.fastcas?.installation_id || "")}</code></p>${state.fastcas?.link ? `<p>已关联身份：${escapeHtml(state.fastcas.link.subject)}<br>最近验证：${formatLocalTime(new Date(state.fastcas.link.verified_at * 1000).toISOString())}</p><button class="quiet-button" data-action="fastcas-unlink">解除关联</button>` : state.fastcas?.pairing?.candidate ? `<p>已验证身份：${escapeHtml(state.fastcas.pairing.candidate.subject)}</p><button class="primary-button" data-action="fastcas-confirm">确认关联到本机</button>` : state.fastcas?.pairing ? `<p>在可信浏览器打开 <a href="${escapeHtml(state.fastcas.pairing.verification_uri_complete)}" target="_blank" rel="noopener noreferrer">FastCAS 设备确认页</a>，核对并输入代码 <strong>${escapeHtml(state.fastcas.pairing.user_code)}</strong>。有效期至 ${formatLocalTime(new Date(state.fastcas.pairing.expires_at * 1000).toISOString())}。</p><button class="quiet-button" data-action="fastcas-poll">检查关联状态</button>` : state.fastcas?.available ? `<p>关联只证明此本机安装的操作人与 FastCAS 身份；本机任务仍由本机确认控制。</p><button class="primary-button" data-action="fastcas-pair">关联 FastCAS</button>` : `<p>在 fastlab.env 配置 FastCAS issuer 与公开客户端 ID 后可选关联；本机工作不依赖它。</p>`}</div></article>
     </section>
     <section class="panel"><header class="panel-header"><h3>仓库</h3><span>${state.repositories.length} 个</span></header>
       <div class="repository-list">${state.repositories.map((item) => `<article class="repository-row"><div><strong>${escapeHtml(item.alias)}</strong>${item.is_default ? '<span class="default-badge">默认</span>' : ""}<p>${escapeHtml(item.path)}</p>${item.error ? `<span class="repository-error">${escapeHtml(item.error)}</span>` : ""}</div><div class="repository-actions">${item.initializable ? `<button class="quiet-button" data-action="initialize-repository" data-repository-id="${item.id}">创建初始提交</button>` : ""}${item.is_default ? "" : `<button class="quiet-button" data-action="default-repository" data-repository-id="${item.id}">设为默认</button>`}<button class="quiet-button" data-action="delete-repository" data-repository-id="${item.id}">移除</button></div></article>`).join("") || '<div class="empty-panel">暂无仓库</div>'}</div>
@@ -372,16 +377,29 @@ function canAutoRenderMain() {
 }
 
 async function refresh({ keepPage = true, renderMain = true, respectEditing = false } = {}) {
-  const [tasks, repositories, settings, health] = await Promise.all([
+  const [tasks, repositories, settings, health, fastcas] = await Promise.all([
     api("/api/tasks"), api("/api/repositories"), api("/api/settings/executors"),
-    api("/api/health"),
+    api("/api/health"), api("/api/fastcas/status"),
   ]);
+  const previousSettings = JSON.stringify([state.repositories, state.settings, state.fastcas, state.health?.feishu]);
   state.tasks = tasks.tasks;
   state.repositories = repositories.repositories;
   state.settings = settings;
   state.health = health;
+  state.fastcas = fastcas;
+  if (fastcas.pairing && !fastcas.pairing.candidate && Date.now() >= state.pairPollDue) {
+    try {
+      const outcome = await fastcasAction("poll");
+      state.pairPollDue = Date.now() + Math.max(5, outcome.retry_after || 5) * 1000;
+      if (outcome.state === "confirm") state.fastcas = await api("/api/fastcas/status");
+    } catch (error) {
+      state.pairPollDue = Date.now() + 10000;
+    }
+  }
+  const settingsChanged = !keepPage || state.page !== "settings" ||
+    previousSettings !== JSON.stringify([state.repositories, state.settings, state.fastcas, state.health?.feishu]);
   if (!keepPage) { state.page = "home"; state.selectedTaskId = null; }
-  if (renderMain && (!respectEditing || canAutoRenderMain())) await render();
+  if (renderMain && settingsChanged && (!respectEditing || canAutoRenderMain())) await render();
   else renderSidebar();
 }
 
@@ -458,6 +476,10 @@ document.addEventListener("click", async (event) => {
     if (action === "home") { state.mainDirty = false; state.page = "home"; state.selectedTaskId = null; return render(); }
     if (action === "new-task") { state.mainDirty = false; state.page = "new"; state.selectedTaskId = null; return render(); }
     if (action === "settings") { state.mainDirty = false; state.page = "settings"; state.selectedTaskId = null; return render(); }
+    if (action === "fastcas-pair") { await fastcasAction("pair"); state.pairPollDue = Date.now() + 5000; return refresh(); }
+    if (action === "fastcas-poll") { const result = await fastcasAction("poll"); state.pairPollDue = Date.now() + Math.max(5, result.retry_after || 5) * 1000; return refresh(); }
+    if (action === "fastcas-confirm") { await fastcasAction("confirm"); toast("已关联 FastCAS 身份。", "success"); return refresh(); }
+    if (action === "fastcas-unlink") { if (!window.confirm("解除这台本机安装的 FastCAS 关联？本机任务不会删除。")) return; await fastcasAction("unlink"); toast("已解除 FastCAS 关联。", "success"); return refresh(); }
     if (["start", "cancel", "verify"].includes(action)) {
       await api(`/api/tasks/${state.selectedTaskId}/${action}`, { method: "POST", body: "{}" });
       toast(action === "start" ? "任务已开始。" : action === "cancel" ? "已请求停止。" : "已开始重新验收。", "success"); return refresh();
