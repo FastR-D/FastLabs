@@ -16,7 +16,6 @@ from agent_adapter import (
     PlannerError, parse_json_object, validate_json_schema,
 )
 from fake_adapter import FakeAgentAdapter
-from feishu_gateway import FeishuGateway
 from server import (
     FastLab, FastLabHandler, RepositoryInitializationRequired, Store,
     ThreadingHTTPServer, executable_command, load_local_env,
@@ -464,61 +463,6 @@ class FastLabIntegrationTests(unittest.TestCase):
         self.assertEqual(current["status"], "running")
         self.assertEqual(current["dispatch_id"], "dispatch-current")
 
-    def test_rerun_preserves_feishu_source_and_channel_binding(self):
-        task = self.app.create_task(
-            "Feishu source",
-            "Keep channel",
-            "",
-            1,
-            source_channel="feishu",
-            channel_context={
-                "channel": "feishu",
-                "conversationId": "oc_rerun",
-                "operatorId": "ou_owner",
-                "messageId": "om_source",
-            },
-        )
-        task = self.wait_for_status(task["id"], "awaiting_approval")
-        self.app.store.update_task(task["id"], status="cancelled")
-        rerun = self.app.rerun_task(task["id"])
-        rerun = self.wait_for_status(rerun["id"], "awaiting_approval")
-        self.assertEqual(rerun["source_channel"], "feishu")
-        bindings = self.app.store.channel_bindings(rerun["id"])
-        self.assertEqual(bindings[0]["conversation_id"], "oc_rerun")
-        self.assertIsNone(bindings[0]["message_id"])
-
-    def test_feishu_continue_creates_child_and_preserves_notifications(self):
-        gateway = FeishuGateway(self.app)
-        gateway.handle_command(
-            "创建 repo\n目标：从飞书完成首个任务\n并发：2",
-            {
-                "conversationId": "oc_continue",
-                "operatorId": "ou_allowed",
-                "messageId": "om_create",
-            },
-        )
-        parent = self.wait_for_status(self.app.list_payload()[0]["id"], "awaiting_approval")
-        self.app.update_task_verifier(parent["id"], "codex", model="fake-deep")
-        self.app.start_task(parent["id"])
-        parent = self.wait_for_status(parent["id"], "completed")
-        reply = gateway.handle_command(
-            "继续 %s 请增加飞书导出" % parent["id"][:8].upper(),
-            {
-                "conversationId": "oc_continue",
-                "operatorId": "ou_allowed",
-                "messageId": "om_continue",
-            },
-        )
-        children = [
-            item for item in self.app.list_payload()
-            if item.get("parent_task_id") == parent["id"]
-        ]
-        self.assertEqual(len(children), 1)
-        self.assertIn(children[0]["id"][:8].upper(), reply)
-        self.assertEqual(children[0]["source_channel"], "feishu")
-        bindings = self.app.store.channel_bindings(children[0]["id"])
-        self.assertTrue(any(item["conversation_id"] == "oc_continue" for item in bindings))
-
     def test_cli_agent_timeout_terminates_process_group_and_records_error(self):
         self.app.shutdown()
         timeout_data = self.root / "timeout-data"
@@ -710,7 +654,8 @@ class FastLabIntegrationTests(unittest.TestCase):
                         min(item["time"] for item in ends.values()))
 
     def test_global_limit_caps_multiple_tasks(self):
-        self.app.update_executor_settings({"globalConcurrency": 2})
+        self.app.global_agent_gate.set_limit(2)
+        self.app.agent_gate.set_limit(2)
         first = self.prepare_task("First", 4)
         second = self.prepare_task("Second", 4)
         self.adapter.max_active = 0
@@ -819,26 +764,6 @@ class FastLabIntegrationTests(unittest.TestCase):
         stopped = self.wait_for_status(planned["id"], "needs_attention")
         self.assertTrue(any("之外" in (item.get("error") or "") for item in stopped["subtasks"]))
         self.assertFalse((Path(stopped["integration_worktree"]) / "result-S1.txt").exists())
-
-    def test_feishu_commands_use_simple_executor_vocabulary(self):
-        gateway = FeishuGateway(self.app)
-        reply = gateway.handle_command(
-            "创建 repo\n目标：从飞书创建任务\n并发：2",
-            {"conversationId": "oc_mobile", "operatorId": "ou_allowed", "messageId": "om_1"},
-        )
-        self.assertIn("orchestration Skill", reply)
-        task = self.wait_for_status(self.app.list_payload()[0]["id"], "awaiting_approval")
-        self.assertIn("Codex", gateway.handle_command("执行器", {}))
-        short = task["id"][:8].upper()
-        self.assertIn("已分配", gateway.handle_command("分配 %s S1 Claude | sonnet | high" % short, {}))
-        self.assertIn("最终验收", gateway.handle_command("验收 %s Codex | fake-deep | high" % short, {}))
-        card = gateway._task_card(self.app.task_payload(task["id"]))
-        labels = [action["text"]["content"] for element in card["body"]["elements"]
-                  if element["tag"] == "action" for action in element["actions"]]
-        self.assertIn("确认执行", labels)
-        help_text = gateway.handle_command("帮助", {})
-        self.assertIn("分配 <任务ID>", help_text)
-        self.assertNotIn("Profile", help_text)
 
     def test_http_exposes_new_surface_and_removes_old_management(self):
         FastLabHandler.app = self.app
@@ -1220,12 +1145,12 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "JSON"):
             parse_claude_extra_allowed_tools("Bash(npm run *)")
 
-    def test_local_env_accepts_documented_planner_and_feishu_keys_only(self):
+    def test_local_env_accepts_documented_server_keys_only(self):
         with tempfile.TemporaryDirectory(prefix="fastlab-env-") as directory:
             path = Path(directory) / "fastlab.env"
             path.write_text(
-                "FEISHU_APP_ID=file-app\nFEISHU_APP_SECRET=file-secret\n"
-                "FASTLAB_PLANNER_BACKEND=codex\n"
+                "FASTLAB_AUTH_MODE=research\nFASTRESEARCH_API_URL=http://127.0.0.1:8787\n"
+                "FASTLAB_PLANNER_BACKEND=codex\nFASTLAB_PORT=4180\n"
                 "FASTLAB_AGENT_TIMEOUT=90\n"
                 'FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS=["Bash(npm run *)"]\n'
                 "FASTLAB_PLANNER_MODEL=legacy-model-is-ignored\n"
@@ -1234,8 +1159,8 @@ class ValidationTests(unittest.TestCase):
             )
             if os.name != "nt": path.chmod(0o600)
             keys = (
-                "FEISHU_APP_ID", "FEISHU_APP_SECRET", "FASTLAB_PLANNER_BACKEND",
-                "FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS", "FASTLAB_AGENT_TIMEOUT",
+                "FASTLAB_AUTH_MODE", "FASTRESEARCH_API_URL", "FASTLAB_PLANNER_BACKEND",
+                "FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS", "FASTLAB_AGENT_TIMEOUT", "FASTLAB_PORT",
             )
             legacy = ("FASTLAB_PLANNER_MODEL", "FASTLAB_PLANNER_API_KEY")
             previous = {key: os.environ.pop(key, None) for key in keys + legacy}

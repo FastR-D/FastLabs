@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FastLab: a local multi-Agent task gateway for the web and Feishu."""
+"""FastLab: an authenticated, tenant-isolated multi-Agent task gateway."""
 
 import argparse
 import json
@@ -33,8 +33,13 @@ from agent_adapter import (
     VERIFY_CAPABILITY,
     WRITE_CAPABILITY,
 )
-from feishu_gateway import FeishuGateway
-from feishu_help import help_payload as feishu_help_payload
+from multitenancy import (
+    DockerCommandRunner,
+    Principal,
+    ResearchAuthenticator,
+    TenantRegistry,
+    safe_public_path,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -56,15 +61,28 @@ TASK_STATES = {
 }
 SUBTASK_STATES = {"pending", "running", "succeeded", "failed", "blocked", "cancelled"}
 LOCAL_ENV_KEYS = {
-    "FEISHU_APP_ID",
-    "FEISHU_APP_SECRET",
-    "FASTLAB_FEISHU_ALLOWED_OPEN_IDS",
-    "FASTLAB_FEISHU_DEFAULT_CHAT_ID",
     "FASTLAB_PLANNER_BACKEND",
     "FASTLAB_CODEX_BIN",
     "FASTLAB_CLAUDE_BIN",
     "FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS",
     "FASTLAB_AGENT_TIMEOUT",
+    "FASTLAB_AUTH_MODE",
+    "FASTRESEARCH_API_URL",
+    "FASTRESEARCH_COOKIE_NAME",
+    "FASTRESEARCH_PANEL_URL",
+    "FASTLAB_PUBLIC_URL",
+    "FASTLAB_PUBLIC_PATH",
+    "FASTLAB_TENANT_ROOT",
+    "FASTLAB_CREDENTIAL_MASTER_KEY",
+    "FASTLAB_WORKER_IMAGE",
+    "FASTLAB_MAX_CONCURRENCY_PER_USER",
+    "FASTLAB_GLOBAL_CONCURRENCY",
+    "FASTLAB_CONTAINER_CPUS",
+    "FASTLAB_CONTAINER_MEMORY",
+    "FASTLAB_CONTAINER_PIDS",
+    "FASTLAB_PORT",
+    "FASTLAB_CODEX_MODELS",
+    "FASTLAB_CLAUDE_MODELS",
 }
 DEFAULT_GLOBAL_CONCURRENCY = 4
 MAX_GLOBAL_CONCURRENCY = 32
@@ -272,8 +290,9 @@ class AgentRunGate:
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, redactor=None):
         self.path = Path(path)
+        self.redactor = redactor or (lambda value: str(value))
         self.repaired_event_payloads = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -364,46 +383,11 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id, ordinal);
                 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, id);
-                CREATE TABLE IF NOT EXISTS channel_bindings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                    channel TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    message_id TEXT,
-                    source_message_id TEXT,
-                    operator_id TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(task_id, channel, conversation_id)
-                );
-                CREATE TABLE IF NOT EXISTS inbound_events (
-                    channel TEXT NOT NULL,
-                    event_id TEXT NOT NULL,
-                    action TEXT,
-                    task_id TEXT,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY(channel, event_id)
-                );
-                CREATE TABLE IF NOT EXISTS notification_outbox (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
-                    channel TEXT NOT NULL,
-                    destination TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    error TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_outbox_pending
-                    ON notification_outbox(status, id);
                 """
             )
             self._ensure_column(db, "tasks", "repository_id", "TEXT")
             self._ensure_column(db, "tasks", "parent_task_id", "TEXT")
             self._ensure_column(db, "tasks", "working_subdir", "TEXT NOT NULL DEFAULT ''")
-            self._ensure_column(db, "tasks", "source_channel", "TEXT NOT NULL DEFAULT 'web'")
             self._ensure_column(db, "tasks", "role_settings_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(db, "tasks", "planner_thread_id", "TEXT")
             self._ensure_column(db, "tasks", "verifier_thread_id", "TEXT")
@@ -426,14 +410,12 @@ class Store:
                     "WHEN agent_profile_id IN ('builtin-claude','claude') THEN 'claude' "
                     "ELSE executor END WHERE executor IS NULL"
                 )
-            self._ensure_column(db, "channel_bindings", "source_message_id", "TEXT")
             defaults = {
                 "models": {
                     "planner": {"model": "", "reasoningEffort": "high"},
                     "worker": {"model": "", "reasoningEffort": "high"},
                     "verifier": {"model": "", "reasoningEffort": "high"},
                 },
-                "feishu.defaultConversation": "",
                 "agent.globalConcurrency": DEFAULT_GLOBAL_CONCURRENCY,
             }
             now = utc_now()
@@ -507,7 +489,7 @@ class Store:
         return repaired
 
     def create_task(self, title, goal, constraints_text, workspace, max_concurrency,
-                    repository_id=None, source_channel="web", role_settings=None,
+                    repository_id=None, role_settings=None,
                     working_subdir="", parent_task_id=None, base_branch=None,
                     base_commit=None):
         task_id = uuid.uuid4().hex
@@ -516,13 +498,13 @@ class Store:
             db.execute(
                 "INSERT INTO tasks "
                 "(id,parent_task_id,title,goal,constraints_text,workspace,status,max_concurrency,"
-                "repository_id,source_channel,role_settings_json,working_subdir,base_branch,"
+                "repository_id,role_settings_json,working_subdir,base_branch,"
                 "base_commit,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,'planning',?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,'planning',?,?,?,?,?,?,?,?)",
                 (
                     task_id, parent_task_id, title, goal, constraints_text, workspace,
                     max_concurrency,
-                    repository_id, source_channel, json.dumps(role_settings or {}, ensure_ascii=False),
+                    repository_id, json.dumps(role_settings or {}, ensure_ascii=False),
                     working_subdir, base_branch, base_commit, now, now,
                 ),
             )
@@ -549,7 +531,10 @@ class Store:
             "working_subdir",
             "parent_task_id",
         }
-        pairs = [(key, value) for key, value in values.items() if key in allowed]
+        pairs = [
+            (key, self.redactor(value) if key == "error" and value is not None else value)
+            for key, value in values.items() if key in allowed
+        ]
         if not pairs:
             return
         pairs.append(("updated_at", utc_now()))
@@ -578,7 +563,10 @@ class Store:
             "executor",
             "executor_snapshot_json",
         }
-        pairs = [(key, value) for key, value in values.items() if key in allowed]
+        pairs = [
+            (key, self.redactor(value) if key == "error" and value is not None else value)
+            for key, value in values.items() if key in allowed
+        ]
         if not pairs:
             return
         pairs.append(("updated_at", utc_now()))
@@ -594,7 +582,10 @@ class Store:
         allowed = {
             "status", "session_id", "exit_code", "error", "pending_message",
         }
-        pairs = [(key, value) for key, value in values.items() if key in allowed]
+        pairs = [
+            (key, self.redactor(value) if key == "error" and value is not None else value)
+            for key, value in values.items() if key in allowed
+        ]
         if not pairs:
             return False
         pairs.append(("updated_at", utc_now()))
@@ -635,11 +626,12 @@ class Store:
 
     def add_event(self, task_id, kind, message, subtask_id=None, payload=None):
         encoded = self._encode_event_payload(payload) if payload is not None else None
+        encoded = self.redactor(encoded) if encoded is not None else None
         with self.connect() as db:
             db.execute(
                 "INSERT INTO events (task_id,subtask_id,kind,message,payload_json,created_at) "
                 "VALUES (?,?,?,?,?,?)",
-                (task_id, subtask_id, kind, compact_error(message, 8000), encoded, utc_now()),
+                (task_id, subtask_id, kind, compact_error(self.redactor(message), 8000), encoded, utc_now()),
             )
             db.execute("UPDATE tasks SET updated_at=? WHERE id=?", (utc_now(), task_id))
 
@@ -786,46 +778,9 @@ class Store:
 
     def delete_task(self, task_id):
         with self.connect() as db:
-            db.execute("DELETE FROM inbound_events WHERE task_id=?", (task_id,))
             cursor = db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
             if not cursor.rowcount:
                 raise KeyError("找不到任务。")
-
-    def bind_task_channel(self, task_id, channel, conversation_id, operator_id=None,
-                          message_id=None, source_message_id=None):
-        now = utc_now()
-        with self.connect() as db:
-            db.execute(
-                "INSERT INTO channel_bindings "
-                "(task_id,channel,conversation_id,message_id,source_message_id,operator_id,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(task_id,channel,conversation_id) DO UPDATE SET "
-                "message_id=COALESCE(excluded.message_id,channel_bindings.message_id),"
-                "source_message_id=COALESCE(excluded.source_message_id,channel_bindings.source_message_id),"
-                "operator_id=COALESCE(excluded.operator_id,channel_bindings.operator_id),"
-                "updated_at=excluded.updated_at",
-                (
-                    task_id, channel, conversation_id, message_id, source_message_id,
-                    operator_id, now, now,
-                ),
-            )
-
-    def channel_bindings(self, task_id):
-        with self.connect() as db:
-            return [dict(row) for row in db.execute(
-                "SELECT * FROM channel_bindings WHERE task_id=?", (task_id,)
-            )]
-
-    def claim_inbound_event(self, channel, event_id, action=None, task_id=None):
-        try:
-            with self.connect() as db:
-                db.execute(
-                    "INSERT INTO inbound_events (channel,event_id,action,task_id,created_at) "
-                    "VALUES (?,?,?,?,?)",
-                    (channel, event_id, action, task_id, utc_now()),
-                )
-            return True
-        except sqlite3.IntegrityError:
-            return False
 
     def transition_task(self, task_id, status, kind, message, error=None, payload=None,
                         subtask_id=None):
@@ -834,85 +789,14 @@ class Store:
         with self.connect() as db:
             db.execute(
                 "UPDATE tasks SET status=?,error=?,updated_at=? WHERE id=?",
-                (status, error, now, task_id),
+                (status, self.redactor(error) if error else None, now, task_id),
             )
             db.execute(
                 "INSERT INTO events (task_id,subtask_id,kind,message,payload_json,created_at) "
                 "VALUES (?,?,?,?,?,?)",
-                (task_id, subtask_id, kind, compact_error(message, 8000), encoded_payload, now),
+                (task_id, subtask_id, kind, compact_error(self.redactor(message), 8000),
+                 self.redactor(encoded_payload) if encoded_payload else None, now),
             )
-            destinations = [dict(row) for row in db.execute(
-                "SELECT channel,conversation_id FROM channel_bindings WHERE task_id=?", (task_id,)
-            )]
-            if not destinations:
-                default_row = db.execute(
-                    "SELECT value_json FROM settings WHERE key='feishu.defaultConversation'"
-                ).fetchone()
-                default = self._load_json(
-                    default_row["value_json"], "设置 feishu.defaultConversation"
-                ) if default_row else ""
-                if default:
-                    destinations.append({"channel": "feishu", "conversation_id": default})
-            outbox_payload = json.dumps(
-                {"taskId": task_id, "status": status, "kind": kind, "message": message},
-                ensure_ascii=False,
-            )
-            for destination in destinations:
-                db.execute(
-                    "INSERT INTO notification_outbox "
-                    "(task_id,channel,destination,payload_json,status,created_at,updated_at) "
-                    "VALUES (?,?,?,?,'pending',?,?)",
-                    (task_id, destination["channel"], destination["conversation_id"], outbox_payload, now, now),
-                )
-
-    def pending_outbox(self, limit=20):
-        with self.connect() as db:
-            rows = db.execute(
-                "SELECT * FROM notification_outbox WHERE status='pending' ORDER BY id LIMIT ?",
-                (limit,),
-            ).fetchall()
-        result = []
-        for row in rows:
-            item = dict(row)
-            item["payload"] = self._load_json(
-                item.pop("payload_json"), "通知 %s" % item["id"]
-            )
-            result.append(item)
-        return result
-
-    def enqueue_notification(self, task_id, kind, message):
-        now = utc_now()
-        payload = json.dumps(
-            {"taskId": task_id, "kind": kind, "message": message}, ensure_ascii=False
-        )
-        with self.connect() as db:
-            destinations = [dict(row) for row in db.execute(
-                "SELECT channel,conversation_id FROM channel_bindings WHERE task_id=?", (task_id,)
-            )]
-            if not destinations:
-                default_row = db.execute(
-                    "SELECT value_json FROM settings WHERE key='feishu.defaultConversation'"
-                ).fetchone()
-                default = self._load_json(
-                    default_row["value_json"], "设置 feishu.defaultConversation"
-                ) if default_row else ""
-                if default:
-                    destinations.append({"channel": "feishu", "conversation_id": default})
-            for destination in destinations:
-                db.execute(
-                    "INSERT INTO notification_outbox "
-                    "(task_id,channel,destination,payload_json,status,created_at,updated_at) "
-                    "VALUES (?,?,?,?,'pending',?,?)",
-                    (task_id, destination["channel"], destination["conversation_id"], payload, now, now),
-                )
-
-    def finish_outbox(self, item_id, error=None):
-        with self.connect() as db:
-            db.execute(
-                "UPDATE notification_outbox SET status=?,attempts=attempts+1,error=?,updated_at=? WHERE id=?",
-                ("pending" if error else "sent", compact_error(error) if error else None, utc_now(), item_id),
-            )
-
     @staticmethod
     def progress(subtasks):
         if not subtasks:
@@ -926,15 +810,25 @@ class Store:
 
 class FastLab:
     def __init__(self, workspace=None, data_dir=None, codex_bin=None, agent_adapter=None,
-                 claude_bin=None, planner=None):
+                 claude_bin=None, planner=None, repository_root=None,
+                 command_runner=None, shared_agent_gate=None, tenant_limit=None,
+                 credential_available=None, redactor=None):
         self.workspace = None
         self.default_repository_id = None
         self.data_dir = Path(data_dir or APP_ROOT / ".fastlab").expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.store = Store(self.data_dir / "fastlab.db")
-        default_feishu_conversation = os.environ.get("FASTLAB_FEISHU_DEFAULT_CHAT_ID", "").strip()
-        if default_feishu_conversation:
-            self.store.set_setting("feishu.defaultConversation", default_feishu_conversation)
+        self.repository_root = (
+            Path(repository_root).expanduser().resolve() if repository_root else None
+        )
+        if self.repository_root:
+            self.repository_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.command_runner = command_runner
+        self.credential_available = credential_available or (lambda _provider: True)
+        self.allowed_models = {
+            "codex": [item.strip() for item in os.environ.get("FASTLAB_CODEX_MODELS", "").split(",") if item.strip()],
+            "claude": [item.strip() for item in os.environ.get("FASTLAB_CLAUDE_MODELS", "sonnet,opus").split(",") if item.strip()],
+        }
+        self.store = Store(self.data_dir / "fastlab.db", redactor=redactor)
         self.merge_lock = threading.Lock()
         self.repository_lock = threading.Lock()
         self.scheduler_lock = threading.Lock()
@@ -957,12 +851,15 @@ class FastLab:
             codex_adapter = agent_adapter
         else:
             requested_codex = codex_bin or os.environ.get("FASTLAB_CODEX_BIN") or "codex"
-            resolved = resolve_executable(requested_codex)
+            resolved = requested_codex if command_runner else resolve_executable(requested_codex)
             if resolved:
-                codex_adapter = CodexCLIAdapter(resolved, self.data_dir / "runtime")
+                codex_adapter = CodexCLIAdapter(
+                    resolved, self.data_dir / "runtime", command_runner=command_runner,
+                    models=self.allowed_models["codex"],
+                )
         self.codex_bin = getattr(codex_adapter, "binary", None)
         requested_claude = claude_bin or os.environ.get("FASTLAB_CLAUDE_BIN") or "claude"
-        self.claude_bin = resolve_executable(requested_claude)
+        self.claude_bin = requested_claude if command_runner else resolve_executable(requested_claude)
         self.executors = {}
         if codex_adapter:
             self.executors["codex"] = codex_adapter
@@ -974,7 +871,9 @@ class FastLab:
             self.executors["claude"] = ClaudeCLIAdapter(
                 self.claude_bin,
                 allowed_tools=claude_allowed_tools,
-                models=["sonnet", "opus"],
+                models=self.allowed_models["claude"],
+                permission_modes=ClaudeCLIAdapter.MODERN_PERMISSION_MODES if command_runner else None,
+                command_runner=command_runner,
             )
         self.planner = planner or self._planner_from_environment()
         if not isinstance(self.planner, Planner) and not all(
@@ -983,13 +882,14 @@ class FastLab:
             raise TypeError("planner 不符合 Planner 接口。")
         self.active_run_adapters = {}
         self.active_run_lock = threading.Lock()
-        global_limit = self._normalize_global_concurrency(
-            self.store.get_setting("agent.globalConcurrency", DEFAULT_GLOBAL_CONCURRENCY)
-        )
-        self.agent_gate = AgentRunGate(global_limit)
+        global_limit = self._normalize_global_concurrency(os.environ.get(
+            "FASTLAB_GLOBAL_CONCURRENCY",
+            self.store.get_setting("agent.globalConcurrency", DEFAULT_GLOBAL_CONCURRENCY),
+        ))
+        self.global_agent_gate = shared_agent_gate or AgentRunGate(global_limit)
+        per_user = tenant_limit or os.environ.get("FASTLAB_MAX_CONCURRENCY_PER_USER") or global_limit
+        self.agent_gate = AgentRunGate(self._normalize_global_concurrency(per_user))
         self._rebuild_documents()
-        self.feishu = FeishuGateway(self)
-        self.feishu.start()
 
     def _planner_from_environment(self):
         backend = str(os.environ.get("FASTLAB_PLANNER_BACKEND") or "codex").strip().lower()
@@ -1076,6 +976,11 @@ class FastLab:
         if source is None:
             raise ValueError("尚未登记 Git 仓库，请先在设置页添加仓库。")
         workspace = Path(source).expanduser().resolve()
+        if self.repository_root:
+            try:
+                workspace.relative_to(self.repository_root)
+            except ValueError as exc:
+                raise ValueError("仓库目录越出当前用户空间。") from exc
         if not workspace.is_dir():
             raise ValueError("工作目录不存在：%s" % workspace)
         inside = self._git(
@@ -1086,7 +991,13 @@ class FastLab:
         root = self._git(["rev-parse", "--show-toplevel"], cwd=workspace).stdout.strip()
         if not root:
             raise ValueError("无法确定 Git 仓库根目录：%s" % workspace)
-        return Path(root).expanduser().resolve()
+        resolved = Path(root).expanduser().resolve()
+        if self.repository_root:
+            try:
+                resolved.relative_to(self.repository_root)
+            except ValueError as exc:
+                raise ValueError("Git 根目录越出当前用户空间。") from exc
+        return resolved
 
     def _git(self, arguments, cwd=None, check=True, timeout=None):
         try:
@@ -1126,6 +1037,9 @@ class FastLab:
             raise ValueError("%s 尚未安装。" % EXECUTOR_LABELS[name])
         if capability and not adapter.supports(capability):
             raise ValueError("%s 不支持当前操作。" % EXECUTOR_LABELS[name])
+        provider = "openai" if name == "codex" else "anthropic"
+        if not self.credential_available(provider):
+            raise ValueError("请先在设置页配置 %s API Key。" % provider.title())
         health = adapter.health()
         if not health.get("available", True):
             raise ValueError("%s 当前不可用：%s" % (
@@ -1135,10 +1049,13 @@ class FastLab:
 
     def _executor_snapshot(self, executor, model=None, effort=None):
         name, adapter = self._executor_adapter(executor)
+        selected_model = str(model or "").strip()
+        if self.command_runner and selected_model and selected_model not in self.allowed_models[name]:
+            raise ValueError("所选模型不在服务器允许列表中。")
         return {
             "executor": name,
             "name": EXECUTOR_LABELS[name],
-            "model": str(model or "").strip(),
+            "model": selected_model,
             "reasoningEffort": str(effort or "high"),
             "kind": adapter.kind,
         }
@@ -1156,10 +1073,13 @@ class FastLab:
                 continue
             try:
                 health = adapter.health()
+                provider = "openai" if name == "codex" else "anthropic"
+                credential_ready = bool(self.credential_available(provider))
                 result.append({
                     "id": name, "name": EXECUTOR_LABELS[name], "kind": adapter.kind,
-                    "available": bool(health.get("available", True)),
-                    "models": adapter.models(), "error": health.get("error"),
+                    "available": bool(health.get("available", True)) and credential_ready,
+                    "models": adapter.models(),
+                    "error": health.get("error") if credential_ready else "尚未配置 API Key。",
                 })
             except Exception as exc:
                 result.append({
@@ -1169,13 +1089,15 @@ class FastLab:
         return result
 
     def executor_settings(self):
-        runs = self.agent_gate.snapshot()
+        runs = self.global_agent_gate.snapshot()
+        tenant_runs = self.agent_gate.snapshot()
         return {
             "planner": self.role_settings()["planner"],
             "executors": self.list_executors(),
             "globalConcurrency": runs["limit"],
             "maxGlobalConcurrency": MAX_GLOBAL_CONCURRENCY,
             "runs": runs,
+            "tenantRuns": tenant_runs,
             "orchestrationSkill": {
                 "name": "orchestration",
                 "source": "https://github.com/stablyai/orca/tree/main/skills/orchestration",
@@ -1184,15 +1106,7 @@ class FastLab:
         }
 
     def update_executor_settings(self, payload):
-        if not isinstance(payload, dict):
-            raise ValueError("设置格式无效。")
-        if "globalConcurrency" in payload:
-            limit = self._normalize_global_concurrency(payload["globalConcurrency"])
-            self.store.set_setting("agent.globalConcurrency", limit)
-            self.agent_gate.set_limit(limit)
-        if "planner" in payload:
-            raise ValueError("Planner 配置来自环境变量；请修改配置文件后重启 FastLab。")
-        return self.executor_settings()
+        raise ValueError("执行器和并发策略由服务器管理员统一配置。")
 
     def role_settings(self):
         planner = dict(self.planner.settings())
@@ -1234,13 +1148,28 @@ class FastLab:
                 "initializable": path.is_dir(),
                 "error": compact_error(exc, 240),
             })
+        if self.repository_root:
+            try:
+                result["path"] = str(Path(repository["path"]).resolve().relative_to(self.repository_root))
+            except ValueError:
+                result["path"] = ""
         return result
 
     def _repository_path_for_add(self, path, initialize=False):
         raw_path = str(path or "").strip()
         if not raw_path:
             raise ValueError("请填写仓库目录。")
-        candidate = Path(raw_path).expanduser().resolve()
+        raw_candidate = Path(raw_path).expanduser()
+        if self.repository_root:
+            if raw_candidate.is_absolute() or ".." in raw_candidate.parts:
+                raise ValueError("只能填写当前用户仓库根目录下的相对路径。")
+            candidate = (self.repository_root / raw_candidate).resolve()
+            try:
+                candidate.relative_to(self.repository_root)
+            except ValueError as exc:
+                raise ValueError("仓库目录越出当前用户空间。") from exc
+        else:
+            candidate = raw_candidate.resolve()
         if not candidate.is_dir():
             raise ValueError("仓库目录不存在或不是文件夹：%s" % candidate)
         inside = self._git(
@@ -1305,7 +1234,10 @@ class FastLab:
             raw_path = str(path or "").strip()
             if not raw_path:
                 raise ValueError("请填写仓库目录。")
-            candidate = Path(raw_path).expanduser().resolve()
+            candidate = (
+                (self.repository_root / raw_path).resolve()
+                if self.repository_root else Path(raw_path).expanduser().resolve()
+            )
             if self.store.find_repository(str(candidate)):
                 raise ValueError("该仓库已经登记。")
             resolved, initialized = self._repository_path_for_add(path, bool(initialize))
@@ -1337,10 +1269,21 @@ class FastLab:
         alias = str(alias or "").strip()
         if not re.match(r"^[a-zA-Z0-9._-]{1,40}$", alias):
             raise ValueError("仓库别名格式无效。")
-        resolved = self._resolve_workspace(path)
         current = self.store.get_repository(repository_id)
         if not current:
             raise KeyError("找不到仓库。")
+        if self.repository_root:
+            raw = Path(str(path or ""))
+            if raw.is_absolute():
+                # The UI receives a relative display path, but tolerate the unchanged stored path.
+                candidate = raw.resolve()
+                if str(candidate) != current["path"]:
+                    raise ValueError("只能填写当前用户仓库根目录下的相对路径。")
+            else:
+                candidate = (self.repository_root / raw).resolve()
+            resolved = self._resolve_workspace(candidate)
+        else:
+            resolved = self._resolve_workspace(path)
         result = self.store.update_repository(
             repository_id, alias, str(resolved), bool(is_default) or current["is_default"]
         )
@@ -1372,14 +1315,10 @@ class FastLab:
                 task["constraints_text"],
                 task["max_concurrency"],
                 repository_id=task.get("repository_id"),
-                source_channel=task.get("source_channel") or "web",
                 working_subdir=task.get("working_subdir") or "",
-                inherit_channels_from=(
-                    task_id if task.get("source_channel") == "feishu" else None
-                ),
             )
 
-    def continue_task(self, task_id, message, channel_context=None):
+    def continue_task(self, task_id, message):
         message = str(message or "").strip()
         if not message:
             raise ValueError("继续修改的追加要求不能为空。")
@@ -1420,13 +1359,10 @@ class FastLab:
                 task["constraints_text"],
                 task["max_concurrency"],
                 repository_id=task.get("repository_id"),
-                source_channel=task.get("source_channel") or "web",
-                channel_context=channel_context,
                 working_subdir=task.get("working_subdir") or "",
                 parent_task_id=task_id,
                 base_branch=current_branch,
                 base_commit=current_head,
-                inherit_channels_from=task_id,
             )
 
     def clear_task_logs(self, task_id):
@@ -1560,15 +1496,11 @@ class FastLab:
                 "skill": "orchestration",
                 "source": "https://github.com/stablyai/orca/tree/main/skills/orchestration",
             },
-            "feishu": self.feishu.status() if self.feishu else {
-                "configured": False, "connected": False, "error": None
-            },
         }
 
     def create_task(self, title, goal, constraints_text, max_concurrency, workspace=None,
-                    repository_id=None, source_channel="web", channel_context=None,
-                    working_subdir="", parent_task_id=None, base_branch=None,
-                    base_commit=None, inherit_channels_from=None):
+                    repository_id=None, working_subdir="", parent_task_id=None,
+                    base_branch=None, base_commit=None):
         goal = str(goal or "").strip()
         if not goal:
             raise ValueError("请填写任务目标。")
@@ -1585,6 +1517,9 @@ class FastLab:
         task_workspace = Path(repository["path"])
         normalized_subdir = self._normalize_working_subdir(task_workspace, working_subdir)
         role_settings = self.role_settings()
+        planner_provider = "anthropic" if getattr(self.planner, "backend", "") == "claude" else "openai"
+        if not self.credential_available(planner_provider):
+            raise ValueError("请先在设置页配置 %s API Key。" % planner_provider.title())
         planner_health = self.planner.health()
         if not planner_health.get("available", True):
             raise ValueError("Planner 当前不可用：%s" % (
@@ -1597,37 +1532,16 @@ class FastLab:
             str(task_workspace),
             concurrency,
             repository_id=repository["id"],
-            source_channel=source_channel,
             role_settings=role_settings,
             working_subdir=normalized_subdir,
             parent_task_id=parent_task_id,
             base_branch=base_branch,
             base_commit=base_commit,
         )
-        if inherit_channels_from:
-            self._copy_task_channels(inherit_channels_from, task_id)
-        if channel_context:
-            self.store.bind_task_channel(
-                task_id,
-                channel_context.get("channel", source_channel),
-                channel_context["conversationId"],
-                channel_context.get("operatorId"),
-                source_message_id=channel_context.get("messageId"),
-            )
         self.store.add_event(task_id, "task.created", "任务已创建，正在生成执行计划。")
         self.write_docs(task_id)
         self._spawn(self._plan_task, task_id, "")
         return self.task_payload(task_id)
-
-    def _copy_task_channels(self, source_task_id, target_task_id):
-        for binding in self.store.channel_bindings(source_task_id):
-            self.store.bind_task_channel(
-                target_task_id,
-                binding["channel"],
-                binding["conversation_id"],
-                binding.get("operator_id"),
-                source_message_id=binding.get("source_message_id"),
-            )
 
     def _resolve_repository(self, repository_id=None, workspace=None):
         if repository_id:
@@ -1736,8 +1650,6 @@ class FastLab:
                     task_id, kind, message, subtask_id=subtask_id,
                     payload=event_payload or None,
                 )
-                if notify:
-                    self.store.enqueue_notification(task_id, kind, message)
             self._write_docs_unlocked(task_id)
             return True
 
@@ -1802,6 +1714,11 @@ class FastLab:
         _, adapter = self._executor_adapter(executor, capability)
         self.agent_gate.acquire(cancelled)
         try:
+            self.global_agent_gate.acquire(cancelled)
+        except Exception:
+            self.agent_gate.release()
+            raise
+        try:
             if cancelled():
                 raise AgentRunCancelled("Agent 运行在启动前被取消。")
             with self.active_run_lock:
@@ -1822,6 +1739,7 @@ class FastLab:
         finally:
             with self.active_run_lock:
                 self.active_run_adapters.pop(key, None)
+            self.global_agent_gate.release()
             self.agent_gate.release()
 
     def _run_planner(self, task_id, key, prompt, context):
@@ -1830,6 +1748,11 @@ class FastLab:
             return self.shutting_down or task is None or task["cancel_requested"]
 
         self.agent_gate.acquire(cancelled)
+        try:
+            self.global_agent_gate.acquire(cancelled)
+        except Exception:
+            self.agent_gate.release()
+            raise
         try:
             if cancelled():
                 raise AgentRunCancelled("Planner 在启动前被取消。")
@@ -1851,6 +1774,7 @@ class FastLab:
         finally:
             with self.active_run_lock:
                 self.active_run_adapters.pop(key, None)
+            self.global_agent_gate.release()
             self.agent_gate.release()
 
     def _spawn(self, target, *arguments):
@@ -2892,9 +2816,6 @@ class FastLab:
                 "用户已为自动验收的不确定项补充人工证据。",
                 payload={"evidence": evidence},
             )
-            self.store.enqueue_notification(
-                task_id, "verification.manual", "用户已确认人工验收通过。"
-            )
             self._write_docs_unlocked(task_id)
             try:
                 return self.deliver_task(task_id)
@@ -3241,12 +3162,6 @@ class FastLab:
                     subtask["plan_key"], EXECUTOR_LABELS[executor]
                 ), subtask_id=subtask_id,
             )
-            self.store.enqueue_notification(
-                task["id"], "subtask.executor",
-                "%s 已分配给 %s。" % (
-                    subtask["plan_key"], EXECUTOR_LABELS[executor]
-                ),
-            )
             self._write_docs_unlocked(task["id"])
         return self.task_payload(task["id"])
 
@@ -3337,10 +3252,6 @@ class FastLab:
                 task_id, role_settings_json=json.dumps(roles, ensure_ascii=False)
             )
             self.store.add_event(
-                task_id, "task.verifier",
-                "最终验收将由 %s 执行。" % EXECUTOR_LABELS[executor],
-            )
-            self.store.enqueue_notification(
                 task_id, "task.verifier",
                 "最终验收将由 %s 执行。" % EXECUTOR_LABELS[executor],
             )
@@ -3552,7 +3463,7 @@ class FastLab:
             title=task["title"],
             goal=task["goal"],
             constraints=task["constraints_text"] or "无",
-            source=task.get("source_channel") or "web",
+            source="web",
             parent_task=task.get("parent_task_id") or "无",
             repository_alias=repository["alias"],
             workspace=task["workspace"],
@@ -3599,7 +3510,7 @@ class FastLab:
 {rows}
 """.format(
             status=task["status"],
-            source=task.get("source_channel") or "web",
+            source="web",
             repository_alias=repository["alias"],
             working_subdir=task.get("working_subdir") or "仓库根目录",
             progress=task["progress"],
@@ -3662,8 +3573,7 @@ class FastLab:
         with self.thread_lock:
             self.shutting_down = True
         self.agent_gate.wake_all()
-        if self.feishu:
-            self.feishu.stop()
+        self.global_agent_gate.wake_all()
         current = threading.current_thread()
         deadline = time.time() + 6
         while time.time() < deadline:
@@ -3689,21 +3599,167 @@ class FastLab:
             pass
 
 
+class FastLabService:
+    """Resolve one authenticated FastLab engine per FastResearch account."""
+
+    def __init__(self, data_dir, *, app_factory=FastLab, check_worker_image=True):
+        self.data_dir = Path(data_dir).expanduser().resolve()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.public_path = safe_public_path(os.environ.get("FASTLAB_PUBLIC_PATH", "/lab"))
+        self.public_url = str(os.environ.get("FASTLAB_PUBLIC_URL") or "").strip().rstrip("/") + "/"
+        if not self.public_url.startswith(("http://", "https://")):
+            raise ValueError("FASTLAB_PUBLIC_URL 必须是完整的 http(s) 地址。")
+        configured_url_path = urlparse(self.public_url).path.rstrip("/")
+        if configured_url_path != self.public_path:
+            raise ValueError("FASTLAB_PUBLIC_URL 的路径必须与 FASTLAB_PUBLIC_PATH 一致。")
+        self.public_origin = "%s://%s" % (
+            urlparse(self.public_url).scheme, urlparse(self.public_url).netloc
+        )
+        self.panel_url = str(os.environ.get("FASTRESEARCH_PANEL_URL") or self.public_origin + "/")
+        self.authenticator = ResearchAuthenticator(
+            os.environ.get("FASTRESEARCH_API_URL", "http://127.0.0.1:8787"),
+            os.environ.get("FASTRESEARCH_COOKIE_NAME", "fr_session"),
+        )
+        tenant_root = Path(os.environ.get("FASTLAB_TENANT_ROOT") or self.data_dir / "tenants")
+        self.registry = TenantRegistry(
+            self.data_dir / "fastlab-v2.db", tenant_root,
+            os.environ.get("FASTLAB_CREDENTIAL_MASTER_KEY", ""),
+        )
+        self.worker_image = str(os.environ.get("FASTLAB_WORKER_IMAGE") or "").strip()
+        self.global_gate = AgentRunGate(os.environ.get(
+            "FASTLAB_GLOBAL_CONCURRENCY", DEFAULT_GLOBAL_CONCURRENCY
+        ))
+        self.tenant_limit = int(os.environ.get("FASTLAB_MAX_CONCURRENCY_PER_USER", "2"))
+        self.app_factory = app_factory
+        self.apps = {}
+        self.lock = threading.Lock()
+        if check_worker_image:
+            self.authenticator.check()
+            if not shutil.which("docker"):
+                raise ValueError("找不到 Docker；多用户模式必须使用容器运行 Agent。")
+            DockerCommandRunner(
+                self.worker_image, self.registry.tenant_root, APP_ROOT,
+                lambda _provider: "probe"
+            ).check()
+
+    def authenticate(self, cookie_header):
+        return self.authenticator.authenticate(cookie_header)
+
+    def app_for(self, principal):
+        tenant = self.registry.ensure_tenant(principal)
+        key = tenant["tenantKey"]
+        with self.lock:
+            current = self.apps.get(key)
+            if current:
+                return current
+            root = tenant["root"]
+            credential = lambda provider: self.registry.credential(principal.account_id, provider)
+            runner = DockerCommandRunner(
+                self.worker_image, root, APP_ROOT, credential,
+                cpus=os.environ.get("FASTLAB_CONTAINER_CPUS", "2"),
+                memory=os.environ.get("FASTLAB_CONTAINER_MEMORY", "4g"),
+                pids=os.environ.get("FASTLAB_CONTAINER_PIDS", "256"),
+            )
+            app = self.app_factory(
+                data_dir=root,
+                repository_root=root / "repositories",
+                command_runner=runner,
+                shared_agent_gate=self.global_gate,
+                tenant_limit=self.tenant_limit,
+                credential_available=lambda provider: bool(credential(provider)),
+                redactor=lambda value: self.registry.redact(principal.account_id, value),
+            )
+            self.apps[key] = app
+            return app
+
+    def me(self, principal):
+        tenant = self.registry.ensure_tenant(principal)
+        app = self.app_for(principal)
+        return {
+            "person": principal.person,
+            "spaceReady": True,
+            "repositoryCount": len(app.store.list_repositories()),
+            "credentials": self.registry.credential_status(principal.account_id),
+        }
+
+    def health_payload(self):
+        return {
+            "ok": True,
+            "mode": "research",
+            "docker": bool(shutil.which("docker")),
+            "workerImage": self.worker_image,
+            "activeTenants": len(self.apps),
+            "agentRuns": self.global_gate.snapshot(),
+        }
+
+    def shutdown(self):
+        with self.lock:
+            apps = list(self.apps.values())
+        for app in apps:
+            app.shutdown()
+
+
 class FastLabHandler(BaseHTTPRequestHandler):
     app = None
     server_version = "FastLab/0.1"
 
+    def request_path(self):
+        path = unquote(urlparse(self.path).path)
+        service = type(self).app
+        if isinstance(service, FastLabService) and service.public_path:
+            if path == service.public_path:
+                return "/"
+            if path.startswith(service.public_path + "/"):
+                return path[len(service.public_path):]
+        return path
+
+    def prepare_tenant(self, path, unsafe=False):
+        service = type(self).app
+        if not isinstance(service, FastLabService):
+            self.app = service
+            self.service = None
+            self.principal = None
+            return True
+        if unsafe and self.headers.get("Origin") != service.public_origin:
+            self.json_response(403, {"error": "不允许跨站操作。"})
+            return False
+        principal = service.authenticate(self.headers.get("Cookie", ""))
+        if principal is None:
+            if path.startswith("/api/"):
+                self.json_response(401, {"error": "FastResearch 登录已失效。", "loginUrl": service.panel_url})
+            else:
+                self.send_response(302)
+                self.send_header("Location", service.panel_url)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            return False
+        self.service, self.principal = service, principal
+        self.app = service.app_for(principal)
+        return True
+
     def do_GET(self):
         try:
-            path = unquote(urlparse(self.path).path)
+            path = self.request_path()
             if path == "/api/health":
-                return self.json_response(200, self.app.health_payload())
+                service = type(self).app
+                payload = service.health_payload() if isinstance(service, FastLabService) else service.health_payload()
+                return self.json_response(200, payload)
+            if not self.prepare_tenant(path):
+                return
+            if path == "/api/me":
+                return self.json_response(200, self.service.me(self.principal) if self.service else {
+                    "person": "local", "spaceReady": True, "credentials": {}
+                })
             if path == "/api/repositories":
                 return self.json_response(200, {"repositories": self.app.list_repositories()})
-            if path == "/api/help/feishu":
-                return self.json_response(200, feishu_help_payload())
             if path == "/api/settings/executors":
                 return self.json_response(200, self.app.executor_settings())
+            match = re.fullmatch(r"/api/settings/credentials/(openai|anthropic)", path)
+            if match and self.service:
+                return self.json_response(200, self.service.registry.credential_status(
+                    self.principal.account_id
+                )[match.group(1)])
             if path == "/api/tasks":
                 return self.json_response(200, {"tasks": self.app.list_payload()})
             match = re.fullmatch(r"/api/tasks/([a-f0-9]+)", path)
@@ -3719,7 +3775,9 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            path = unquote(urlparse(self.path).path)
+            path = self.request_path()
+            if not self.prepare_tenant(path, unsafe=True):
+                return
             body = self.read_json()
             if path == "/api/tasks":
                 task = self.app.create_task(
@@ -3802,10 +3860,18 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         try:
-            path = unquote(urlparse(self.path).path)
+            path = self.request_path()
+            if not self.prepare_tenant(path, unsafe=True):
+                return
             body = self.read_json()
             if path == "/api/settings/executors":
-                return self.json_response(200, self.app.update_executor_settings(body))
+                return self.json_response(403, {"error": "执行器策略由服务器管理员配置。"})
+            match = re.fullmatch(r"/api/settings/credentials/(openai|anthropic)", path)
+            if match and self.service:
+                result = self.service.registry.set_credential(
+                    self.principal.account_id, match.group(1), body.get("key")
+                )
+                return self.json_response(200, result)
             match = re.fullmatch(r"/api/subtasks/([^/]+)/executor", path)
             if match:
                 return self.json_response(200, self.app.update_subtask_executor(
@@ -3843,7 +3909,15 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         try:
-            path = unquote(urlparse(self.path).path)
+            path = self.request_path()
+            if not self.prepare_tenant(path, unsafe=True):
+                return
+            credential = re.fullmatch(r"/api/settings/credentials/(openai|anthropic)", path)
+            if credential and self.service:
+                self.service.registry.delete_credential(
+                    self.principal.account_id, credential.group(1)
+                )
+                return self.json_response(200, {"ok": True})
             match = re.fullmatch(r"/api/tasks/([a-f0-9]+)/events", path)
             if match:
                 return self.json_response(200, self.app.clear_task_logs(match.group(1)))
@@ -3870,6 +3944,12 @@ class FastLabHandler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Allow", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def json_response(self, status, payload):
         encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
@@ -3889,6 +3969,14 @@ class FastLabHandler(BaseHTTPRequestHandler):
         if not candidate.is_file():
             candidate = WEB_ROOT / "index.html"
         content = candidate.read_bytes()
+        service = getattr(self, "service", None)
+        if candidate.name == "index.html" and service:
+            marker = b"<head>"
+            inject = (
+                "<script>window.FASTLAB_PUBLIC_PATH=%s;</script>" %
+                json.dumps(service.public_path)
+            ).encode("utf-8")
+            content = content.replace(marker, marker + inject, 1)
         content_type = mimetypes.guess_type(str(candidate))[0] or "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", content_type + ("; charset=utf-8" if content_type.startswith("text/") else ""))
@@ -3905,13 +3993,13 @@ class FastLabHandler(BaseHTTPRequestHandler):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="FastLab local multi-agent task console")
+    parser = argparse.ArgumentParser(description="FastLab multi-user Agent task console")
     parser.add_argument(
         "--workspace",
         default=None,
         help="Optional path inside the default Git repository",
     )
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--port", type=int, default=int(os.environ.get("FASTLAB_PORT", "4180")))
     parser.add_argument("--data-dir", default=str(APP_ROOT / ".fastlab"))
     parser.add_argument(
         "--env-file",
@@ -3943,15 +4031,21 @@ def main(argv=None):
     if sys.version_info < (3, 10):
         raise SystemExit("FastLab 需要 Python 3.10 或更高版本。")
     try:
-        app = FastLab(
-            arguments.workspace,
-            arguments.data_dir,
-            arguments.codex_bin or os.environ.get("FASTLAB_CODEX_BIN"),
-            claude_bin=arguments.claude_bin or os.environ.get("FASTLAB_CLAUDE_BIN"),
-        )
+        auth_mode = str(os.environ.get("FASTLAB_AUTH_MODE") or "local").strip().lower()
+        if auth_mode == "research":
+            app = FastLabService(arguments.data_dir)
+        elif auth_mode == "local":
+            app = FastLab(
+                arguments.workspace,
+                arguments.data_dir,
+                arguments.codex_bin or os.environ.get("FASTLAB_CODEX_BIN"),
+                claude_bin=arguments.claude_bin or os.environ.get("FASTLAB_CLAUDE_BIN"),
+            )
+        else:
+            raise ValueError("FASTLAB_AUTH_MODE 只能是 local 或 research。")
     except (OSError, UnicodeError, ValueError) as exc:
         raise SystemExit("FastLab 启动失败：%s" % exc) from exc
-    if app.store.repaired_event_payloads:
+    if isinstance(app, FastLab) and app.store.repaired_event_payloads:
         print(
             "已修复 %s 条旧版本截断的日志记录。" % app.store.repaired_event_payloads,
             flush=True,
@@ -3959,7 +4053,7 @@ def main(argv=None):
     FastLabHandler.app = app
     server = ThreadingHTTPServer(("127.0.0.1", arguments.port), FastLabHandler)
     print("FastLab is running at http://127.0.0.1:%s" % server.server_address[1], flush=True)
-    print("Workspace: %s" % (app.workspace or "not configured"), flush=True)
+    print("Mode: %s" % ("research" if isinstance(app, FastLabService) else "local"), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -355,11 +355,13 @@ class CodexCLIAdapter(AgentAdapter):
         VERIFY_CAPABILITY, SKILLS_CAPABILITY,
     })
 
-    def __init__(self, binary, runtime_dir):
+    def __init__(self, binary, runtime_dir, command_runner=None, models=None):
         self.binary = str(binary)
         self.command_prefix = [sys.executable, self.binary] if Path(self.binary).suffix == ".py" else [self.binary]
         self.runtime_dir = Path(runtime_dir)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.command_runner = command_runner
+        self.configured_models = [str(item).strip() for item in (models or []) if str(item).strip()]
         self._active = {}
         self._active_lock = threading.Lock()
 
@@ -402,11 +404,20 @@ class CodexCLIAdapter(AgentAdapter):
         skill_note = "\n\n已显式注入 Skills：\n" + "\n".join(
             "- %s (%s)" % (item["name"], item["path"]) for item in (skills or [])
         ) if skills else ""
+        process_cwd, process_env = str(cwd), None
+        if self.command_runner:
+            command, process_cwd, process_env = self.command_runner.wrap(
+                command, cwd, writable=str(sandbox).replace("-", "_") != "read_only",
+                executor="codex", key=key,
+            )
         process = subprocess.Popen(
-            command, cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            command, cwd=process_cwd, env=process_env,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
             bufsize=1, **_process_group_options()
         )
+        if process_env:
+            process_env.clear()
         with self._active_lock:
             self._active[key] = process
         session_id = resume_session
@@ -445,6 +456,8 @@ class CodexCLIAdapter(AgentAdapter):
                 process.stdin.close()
             if process.stdout and not process.stdout.closed:
                 process.stdout.close()
+            if self.command_runner:
+                self.command_runner.finished(key)
 
     @staticmethod
     def _event_message(payload):
@@ -464,6 +477,8 @@ class CodexCLIAdapter(AgentAdapter):
         return None
 
     def interrupt(self, key):
+        if self.command_runner:
+            self.command_runner.interrupt(key)
         with self._active_lock:
             process = self._active.get(key)
         if process is None:
@@ -478,6 +493,9 @@ class CodexCLIAdapter(AgentAdapter):
             "executable": self.binary,
             "capabilities": sorted(self.capabilities),
         }
+
+    def models(self):
+        return [{"model": item} for item in self.configured_models]
 
     def close(self):
         with self._active_lock:
@@ -530,7 +548,7 @@ class ClaudeCLIAdapter(AgentAdapter):
     LEGACY_PERMISSION_MODES = frozenset({"acceptEdits", "plan"})
 
     def __init__(self, binary, allowed_tools=None, max_turns=80, models=None,
-                 sandbox_bash=None, permission_modes=None):
+                 sandbox_bash=None, permission_modes=None, command_runner=None):
         self.binary = str(binary)
         self.command_prefix = (
             [sys.executable, self.binary]
@@ -540,6 +558,7 @@ class ClaudeCLIAdapter(AgentAdapter):
         self.sandbox_bash = os.name != "nt" if sandbox_bash is None else bool(sandbox_bash)
         self.max_turns = max(1, min(200, int(max_turns or 80)))
         self.configured_models = [str(item).strip() for item in (models or []) if str(item).strip()]
+        self.command_runner = command_runner
         if permission_modes is None:
             permission_modes = self._detect_permission_modes()
         self.permission_modes = frozenset(
@@ -687,9 +706,15 @@ class ClaudeCLIAdapter(AgentAdapter):
         full_prompt = str(prompt)
         if additions:
             full_prompt += "\n\n" + "\n\n".join(additions)
+        process_cwd, process_env = str(cwd), None
+        if self.command_runner:
+            command, process_cwd, process_env = self.command_runner.wrap(
+                command, cwd, writable=not read_only, executor="claude", key=key,
+            )
         process = subprocess.Popen(
             command,
-            cwd=str(cwd),
+            cwd=process_cwd,
+            env=process_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -699,6 +724,8 @@ class ClaudeCLIAdapter(AgentAdapter):
             bufsize=1,
             **_process_group_options(),
         )
+        if process_env:
+            process_env.clear()
         with self._active_lock:
             self._active[key] = process
         session_id = resume_session
@@ -772,8 +799,12 @@ class ClaudeCLIAdapter(AgentAdapter):
                 process.stdin.close()
             if process.stdout and not process.stdout.closed:
                 process.stdout.close()
+            if self.command_runner:
+                self.command_runner.finished(key)
 
     def interrupt(self, key):
+        if self.command_runner:
+            self.command_runner.interrupt(key)
         with self._active_lock:
             process = self._active.get(key)
         if process is None:

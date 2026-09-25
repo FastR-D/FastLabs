@@ -1,0 +1,24 @@
+[Unit]
+Description=FastLab multi-user task service
+After=docker.service network-online.target fastresearch.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=fastlab
+Group=fastlab
+SupplementaryGroups=docker
+WorkingDirectory=/srv/fastlab/app
+EnvironmentFile=/srv/fastlab/config/fastlab.env
+ExecStartPre=/usr/bin/docker image inspect fastlab-worker:latest
+ExecStartPre=/usr/bin/curl --fail --silent http://127.0.0.1:8787/api/health
+ExecStart=/srv/fastlab/app/.venv/bin/python /srv/fastlab/app/server.py --data-dir /srv/fastlab/data
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/fastlab/data /srv/fastlab/tenants
+
+[Install]
+WantedBy=default.target

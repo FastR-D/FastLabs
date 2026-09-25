@@ -4,9 +4,10 @@
 
 - Python 3.10+
 - Git
-- 已安装并登录的 Codex CLI 或 Claude CLI
+- Docker
+- 管理员构建的 FastLab Worker 镜像（包含 Codex CLI、Claude CLI 和 Git）
 
-FastLab 只调用本机 CLI，不使用远程模型 API 或 Codex SDK，也不保存模型密钥。
+服务器模式通过容器调用 CLI。每位用户在设置页提供自己的 API Key，FastLab 使用主密钥认证加密保存。
 
 ## macOS 与 Linux
 
@@ -19,7 +20,7 @@ cp fastlab.env.example .fastlab/fastlab.env
 python server.py
 ```
 
-打开 [http://127.0.0.1:8787](http://127.0.0.1:8787)。首次启动后进入“设置”登记仓库。
+本地兼容模式打开 `http://127.0.0.1:4180`。服务器模式通过 FastResearch 同站点的 `/lab/` 进入。
 
 ## Windows PowerShell
 
@@ -32,7 +33,7 @@ Copy-Item fastlab.env.example .fastlab\fastlab.env
 python server.py
 ```
 
-原生 Windows 可以运行 FastLab、Codex CLI 和 Claude CLI，但 Claude Code 的系统级 Bash 沙箱只支持 macOS、Linux 和 WSL2。原生 Windows 上的 Claude 命令使用精确权限规则。
+生产多用户模式以 Linux Docker 主机为部署目标。Windows 可使用本地兼容模式或 WSL2 做开发验证。
 
 ## 选择 Planner
 
@@ -54,7 +55,7 @@ FASTLAB_CODEX_BIN=codex
 FASTLAB_CLAUDE_BIN=claude
 ```
 
-Planner 与 Worker 使用本机 CLI 的登录状态和默认模型。Planner 只读生成计划，不执行任务。
+Planner 与 Worker 使用当前用户在 FastLab 中配置的 API Key，并受服务器模型白名单限制。Planner 只读生成计划，不执行任务。
 
 ## Agent 总超时
 
@@ -64,15 +65,17 @@ Planner、Worker 和 Verifier 默认每次最多运行 3600 秒。可在本地�
 FASTLAB_AGENT_TIMEOUT=3600
 ```
 
-超时会终止该 Agent 的整个进程组，不会改变全局并发设置。
+超时会终止并清理该 Agent 的整个容器，不会改变全局或用户并发设置。
 
-## 启动时登记仓库
+## 本地兼容模式登记仓库
 
 `--workspace` 是可选快捷方式，可以传入 Git 仓库或仓库内的任意子目录；FastLab 会解析到 Git 顶层并登记为默认仓库。
 
 ```bash
 python server.py --workspace /path/inside/repository
 ```
+
+服务器多用户模式不接受 `--workspace` 作为共享仓库；管理员应将仓库放入用户专属 `repositories/`，用户在页面填写相对路径。
 
 不传 `--workspace` 也可以正常启动，再从网页“设置”登记一个或多个仓库。
 
@@ -84,6 +87,6 @@ python server.py --workspace /path/inside/repository
 python server.py --env-file /path/to/fastlab.env
 ```
 
-进程中已经存在的同名环境变量优先。`.fastlab/` 已被 Git 忽略，但其中可能包含飞书密钥和运行数据库，不要复制、截图或提交。
+进程中已经存在的同名环境变量优先。`.fastlab/` 已被 Git 忽略，但其中包含加密凭证、主密钥配置和运行数据库，不要复制、截图或提交。
 
-飞书相关变量见[飞书机器人配置指南](feishu-bot.md)，Claude 命令权限见[Claude 执行权限](claude-permissions.md)。
+Claude 命令权限见[Claude 执行权限](claude-permissions.md)。服务器多用户变量以仓库根目录的 `fastlab.env.example` 为准。

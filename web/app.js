@@ -1,5 +1,5 @@
 const state = {
-  tasks: [], repositories: [], settings: null, health: null,
+  tasks: [], repositories: [], settings: null, health: null, me: null,
   page: "home", selectedTaskId: null, timer: null, mainDirty: false,
   renderVersion: 0, taskViews: {},
 };
@@ -44,11 +44,16 @@ function logPresentation(event) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const prefix = String(window.FASTLAB_PUBLIC_PATH || "").replace(/\/$/, "");
+  const response = await fetch(`${prefix}${path}`, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
   const payload = await response.json().catch(() => ({}));
+  if (response.status === 401 && payload.loginUrl) {
+    window.location.assign(payload.loginUrl);
+    throw new Error("FastResearch 登录已失效。");
+  }
   if (!response.ok) {
     const error = new Error(payload.error || `请求失败（${response.status}）`);
     error.code = payload.code;
@@ -324,26 +329,29 @@ function renderTask(task) {
 function renderSettings() {
   leaveTaskView();
   const planner = state.settings?.planner || {};
-  const feishu = state.health?.feishu || {};
+  const credentials = state.me?.credentials || {};
   main.innerHTML = `
     <section class="page-heading"><div><h2 class="page-title">设置</h2></div></section>
     <section class="content-grid two-up">
       <article class="panel"><header class="panel-header"><h3>规划</h3></header>
-        <form class="settings-body" id="executor-settings-form">
+        <div class="settings-body">
           <div class="field"><label>规划工具</label><input value="${plannerLabel(planner)}" readonly></div>
           <p class="privacy-note full">在 <code>fastlab.env</code> 中修改，重启后生效。</p>
-          <div class="field"><label>全局并发</label><input name="globalConcurrency" type="number" min="1" max="${state.settings?.maxGlobalConcurrency || 32}" value="${state.settings?.globalConcurrency || 4}"></div>
-          <button class="primary-button" type="submit">保存并发设置</button>
-        </form>
+          <div class="field"><label>服务器全局并发</label><input value="${state.settings?.globalConcurrency || 4}" readonly></div>
+          <div class="field"><label>我的并发</label><input value="${state.settings?.tenantRuns?.limit || 2}" readonly></div>
+        </div>
       </article>
       <article class="panel"><header class="panel-header"><h3>执行器</h3></header>
         <div class="executor-list">${(state.settings?.executors || []).map((item) => `<div class="executor-row"><div class="executor-copy"><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.kind)}</p>${item.error ? `<span class="repository-error">${escapeHtml(item.error)}</span>` : ""}</div><span class="availability-badge ${item.available ? "" : "offline"}">${item.available ? "可用" : "不可用"}</span></div>`).join("")}</div>
       </article>
-      <article class="panel"><header class="panel-header"><h3>飞书</h3><span>${feishu.connected ? "已连接" : feishu.configured ? "连接异常" : "未配置"}</span></header>${feishu.error ? `<div class="settings-body"><p>${escapeHtml(feishu.error)}</p></div>` : ""}</article>
+      <article class="panel"><header class="panel-header"><h3>模型凭证</h3><span>${escapeHtml(state.me?.person || "")}</span></header>
+        <form class="settings-body credential-form" data-provider="openai"><div class="field"><label>OpenAI API Key</label><input name="key" type="password" autocomplete="off" placeholder="${escapeHtml(credentials.openai?.preview || "尚未配置")}"></div><button class="primary-button" type="submit">保存 OpenAI Key</button>${credentials.openai?.configured ? '<button class="quiet-button" type="button" data-action="delete-credential" data-provider="openai">删除</button>' : ""}</form>
+        <form class="settings-body credential-form" data-provider="anthropic"><div class="field"><label>Anthropic API Key</label><input name="key" type="password" autocomplete="off" placeholder="${escapeHtml(credentials.anthropic?.preview || "尚未配置")}"></div><button class="primary-button" type="submit">保存 Anthropic Key</button>${credentials.anthropic?.configured ? '<button class="quiet-button" type="button" data-action="delete-credential" data-provider="anthropic">删除</button>' : ""}</form>
+      </article>
     </section>
     <section class="panel"><header class="panel-header"><h3>仓库</h3><span>${state.repositories.length} 个</span></header>
       <div class="repository-list">${state.repositories.map((item) => `<article class="repository-row"><div><strong>${escapeHtml(item.alias)}</strong>${item.is_default ? '<span class="default-badge">默认</span>' : ""}<p>${escapeHtml(item.path)}</p>${item.error ? `<span class="repository-error">${escapeHtml(item.error)}</span>` : ""}</div><div class="repository-actions">${item.initializable ? `<button class="quiet-button" data-action="initialize-repository" data-repository-id="${item.id}">创建初始提交</button>` : ""}${item.is_default ? "" : `<button class="quiet-button" data-action="default-repository" data-repository-id="${item.id}">设为默认</button>`}<button class="quiet-button" data-action="delete-repository" data-repository-id="${item.id}">移除</button></div></article>`).join("") || '<div class="empty-panel">暂无仓库</div>'}</div>
-      <form class="settings-body repository-form" id="repository-form"><div class="field"><label>别名</label><input name="alias" required placeholder="my-repo"></div><div class="field"><label>本机路径</label><input name="path" required placeholder="/Users/me/Code/project"></div><button class="primary-button" type="submit">添加仓库</button></form>
+      <form class="settings-body repository-form" id="repository-form"><div class="field"><label>别名</label><input name="alias" required placeholder="my-repo"></div><div class="field"><label>个人仓库相对路径</label><input name="path" required placeholder="project"></div><button class="primary-button" type="submit">添加仓库</button></form>
     </section>`;
 }
 
@@ -372,14 +380,15 @@ function canAutoRenderMain() {
 }
 
 async function refresh({ keepPage = true, renderMain = true, respectEditing = false } = {}) {
-  const [tasks, repositories, settings, health] = await Promise.all([
+  const [tasks, repositories, settings, health, me] = await Promise.all([
     api("/api/tasks"), api("/api/repositories"), api("/api/settings/executors"),
-    api("/api/health"),
+    api("/api/health"), api("/api/me"),
   ]);
   state.tasks = tasks.tasks;
   state.repositories = repositories.repositories;
   state.settings = settings;
   state.health = health;
+  state.me = me;
   if (!keepPage) { state.page = "home"; state.selectedTaskId = null; }
   if (renderMain && (!respectEditing || canAutoRenderMain())) await render();
   else renderSidebar();
@@ -418,12 +427,13 @@ document.addEventListener("submit", async (event) => {
       }) });
       state.mainDirty = false;
       state.page = "task"; state.selectedTaskId = task.id; await refresh();
-    } else if (form.id === "executor-settings-form") {
-      await api("/api/settings/executors", { method: "PUT", body: JSON.stringify({
-        globalConcurrency: Number(data.get("globalConcurrency")),
-      }) });
+    } else if (form.matches(".credential-form")) {
+      const provider = form.dataset.provider;
+      await api(`/api/settings/credentials/${provider}`, {
+        method: "PUT", body: JSON.stringify({ key: data.get("key") }),
+      });
       state.mainDirty = false;
-      toast("设置已保存。", "success"); await refresh();
+      form.reset(); toast("凭证已加密保存。", "success"); await refresh();
     } else if (form.id === "repository-form") {
       const repository = { alias: data.get("alias"), path: data.get("path") };
       let initialized = false;
@@ -458,6 +468,12 @@ document.addEventListener("click", async (event) => {
     if (action === "home") { state.mainDirty = false; state.page = "home"; state.selectedTaskId = null; return render(); }
     if (action === "new-task") { state.mainDirty = false; state.page = "new"; state.selectedTaskId = null; return render(); }
     if (action === "settings") { state.mainDirty = false; state.page = "settings"; state.selectedTaskId = null; return render(); }
+    if (action === "delete-credential") {
+      if (!window.confirm("删除这个 API Key？对应执行器将立即不可用。")) return;
+      await api(`/api/settings/credentials/${button.dataset.provider}`, { method: "DELETE" });
+      toast("凭证已删除。", "success");
+      return refresh();
+    }
     if (["start", "cancel", "verify"].includes(action)) {
       await api(`/api/tasks/${state.selectedTaskId}/${action}`, { method: "POST", body: "{}" });
       toast(action === "start" ? "任务已开始。" : action === "cancel" ? "已请求停止。" : "已开始重新验收。", "success"); return refresh();
