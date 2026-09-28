@@ -1,92 +1,97 @@
 # 安装与配置
 
-## 运行要求
+## 本地开发
 
-- Python 3.10+
-- Git
-- Docker
-- 管理员构建的 FastLab Worker 镜像（包含 Codex CLI、Claude CLI 和 Git）
-
-服务器模式通过容器调用 CLI。每位用户在设置页提供自己的 API Key，FastLab 使用主密钥认证加密保存。
-
-## macOS 与 Linux
+最低要求：Python 3.10+、Git。Node 22 仅用于前端测试。
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-mkdir -p .fastlab
-cp fastlab.env.example .fastlab/fastlab.env
 python server.py
 ```
 
-本地兼容模式打开 `http://127.0.0.1:4180`。服务器模式通过 FastResearch 同站点的 `/lab/` 进入。
+打开 `http://127.0.0.1:4180`。未配置环境文件时默认为 `local` 模式，只允许本机开发；不要
+通过反向代理把该模式暴露给其他用户。
 
-## Windows PowerShell
+普通本机启动与多用户模式使用相同的托管仓库页面，仓库存放在
+`<data-dir>/repositories/<repository-id>/`。在网页创建空仓库或填写 HTTPS Git URL 即可。
 
-```powershell
-py -3.10 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-New-Item -ItemType Directory -Force .fastlab
-Copy-Item fastlab.env.example .fastlab\fastlab.env
-python server.py
-```
-
-生产多用户模式以 Linux Docker 主机为部署目标。Windows 可使用本地兼容模式或 WSL2 做开发验证。
-
-## 选择 Planner
-
-每次任务只使用一个 Planner。编辑 `.fastlab/fastlab.env`，选择 Codex 或 Claude，保存后重启 FastLab。
-
-Codex Planner：
-
-```ini
-FASTLAB_PLANNER_BACKEND=codex
-FASTLAB_CODEX_BIN=codex
-FASTLAB_CLAUDE_BIN=claude
-```
-
-Claude Planner：
-
-```ini
-FASTLAB_PLANNER_BACKEND=claude
-FASTLAB_CODEX_BIN=codex
-FASTLAB_CLAUDE_BIN=claude
-```
-
-Planner 与 Worker 使用当前用户在 FastLab 中配置的 API Key，并受服务器模型白名单限制。Planner 只读生成计划，不执行任务。
-
-## Agent 总超时
-
-Planner、Worker 和 Verifier 默认每次最多运行 3600 秒。可在本地环境文件中修改；设为 0 表示不限制：
-
-```ini
-FASTLAB_AGENT_TIMEOUT=3600
-```
-
-超时会终止并清理该 Agent 的整个容器，不会改变全局或用户并发设置。
-
-## 本地兼容模式登记仓库
-
-`--workspace` 是可选快捷方式，可以传入 Git 仓库或仓库内的任意子目录；FastLab 会解析到 Git 顶层并登记为默认仓库。
+旧开发脚本可以显式用 `--workspace` 登记默认仓库。参数可以指向 Git 根目录或其任意子目录；
+此时进入兼容路径模式，不是新安装的推荐用法：
 
 ```bash
 python server.py --workspace /path/inside/repository
 ```
 
-服务器多用户模式不接受 `--workspace` 作为共享仓库；管理员应将仓库放入用户专属 `repositories/`，用户在页面填写相对路径。
+不传 `--workspace` 时不会要求填写任何本机路径。
 
-不传 `--workspace` 也可以正常启动，再从网页“设置”登记一个或多个仓库。
+## 生产前置条件
 
-## 本地环境文件
+Linux 生产主机还需要：
 
-默认配置文件是 `.fastlab/fastlab.env`。也可以指定其他文件：
+- 专用 `fastlab` 系统用户；
+- 固定版本的 Codex CLI 与 Claude Code；
+- `bubblewrap`、`socat` 和 CLI 所需的 Node runtime；
+- 同机 FastResearch 和 Nginx；
+- 仅 `fastlab` 用户可读的环境文件与数据目录。
+
+默认 `process` 后端不要求 Docker。若组织需要更强的租户边界，再安装 Docker 并显式设置
+`FASTLAB_EXECUTION_BACKEND=docker`。
+
+生产配置：
 
 ```bash
-python server.py --env-file /path/to/fastlab.env
+sudo install -d -o fastlab -g fastlab -m 0700 \
+  /srv/fastlab/data /srv/fastlab/tenants /srv/fastlab/runtime
+sudo install -d -o root -g fastlab -m 0750 /srv/fastlab/config
+sudo install -o root -g fastlab -m 0600 fastlab.env.example \
+  /srv/fastlab/config/fastlab.env
 ```
 
-进程中已经存在的同名环境变量优先。`.fastlab/` 已被 Git 忽略，但其中包含加密凭证、主密钥配置和运行数据库，不要复制、截图或提交。
+编辑配置并生成独立主密钥：
 
-Claude 命令权限见[Claude 执行权限](claude-permissions.md)。服务器多用户变量以仓库根目录的 `fastlab.env.example` 为准。
+```bash
+/srv/fastlab/app/.venv/bin/python -c \
+  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+然后按照[部署指南](deployment.md)执行启动检查、沙箱发布门禁和 systemd 安装。
+
+## 环境文件和优先级
+
+默认环境文件是 `<data-dir>/fastlab.env`，可通过 `--env-file` 指定。启动时先预解析
+`--data-dir`/`--env-file` 并加载文件，再解析其余参数，因此文件中的 `FASTLAB_PORT` 会生效。
+
+优先级从高到低：
+
+1. 显式 CLI 参数；
+2. 服务进程已有环境变量；
+3. 环境文件；
+4. 代码默认值。
+
+环境文件只接受[配置参考](configuration.md)列出的白名单键；未知键会阻止启动。不要把引号、
+命令替换或 shell 脚本放入该文件，它是简单的 `KEY=VALUE` 格式，不是 shell。
+
+旧环境文件中的 `FEISHU_*` 配置必须删除；本版本不恢复飞书集成，也不会忽略这些未知键。
+
+## 设置 Agent、模型与认证
+
+```ini
+FASTLAB_CODEX_BIN=/opt/fastlab-cli/bin/codex
+FASTLAB_CLAUDE_BIN=/opt/fastlab-cli/bin/claude
+```
+
+管理员安装 CLI 并配置模型允许列表。用户在网页设置页选择 Planner、Worker、Verifier 的
+Agent 与模型，并可编辑自己的 orchestration Skill。Planner 始终只读生成计划。
+
+认证可按 Provider 选择 CLI 登录或个人 API Key。新用户未填写 Key 时默认使用自己 runtime
+中的 Codex CLI 登录；Claude CLI 也使用该用户独立 runtime。生产启用前，管理员需在对应用户
+runtime 完成 CLI 登录，或让用户在网页保存加密 API Key。不得复制宿主 HOME 或其他用户的
+CLI 登录文件。
+
+## Windows 与 macOS
+
+这些系统可以使用 `local` 模式开发和运行假 CLI 测试。生产多用户直连沙箱以 Linux 为唯一
+支持目标；原生 Windows/macOS 不能证明与 Linux `bubblewrap` 相同的发布隔离，不得把缺失
+沙箱静默当作成功。

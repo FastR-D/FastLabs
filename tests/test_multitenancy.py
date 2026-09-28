@@ -57,11 +57,23 @@ class MultiTenantTests(unittest.TestCase):
             alice = registry.ensure_tenant(Principal("account-a", "Alice", "a"))
             bob = registry.ensure_tenant(Principal("account-b", "Bob", "b"))
             self.assertNotEqual(alice["root"], bob["root"])
+            for name in ("repositories", "tasks", "worktrees", "runtime", "skills"):
+                self.assertTrue((alice["root"] / name).is_dir())
             saved = registry.set_credential("account-a", "openai", "sk-example-secret-value")
             self.assertTrue(saved["configured"])
+            self.assertEqual(saved["mode"], "api_key")
             self.assertNotIn("example-secret", saved["preview"])
             self.assertEqual(registry.credential("account-a", "openai"), "sk-example-secret-value")
             self.assertEqual(registry.credential("account-b", "openai"), "")
+            self.assertEqual(registry.credential_mode("account-b", "openai"), "cli")
+            self.assertEqual(registry.effective_credential("account-b", "openai"), "")
+            registry.set_credential_mode("account-a", "openai", "cli")
+            self.assertEqual(registry.effective_credential("account-a", "openai"), "")
+            registry.set_credential_mode("account-a", "openai", "api_key")
+            self.assertEqual(
+                registry.effective_credential("account-a", "openai"),
+                "sk-example-secret-value",
+            )
             self.assertEqual(registry.redact("account-a", "token=sk-example-secret-value"), "token=[REDACTED]")
             database = (root / "fastlab-v2.db").read_bytes()
             self.assertNotIn(b"sk-example-secret-value", database)
@@ -92,6 +104,110 @@ class MultiTenantTests(unittest.TestCase):
                     app.add_repository("link", "link")
             finally:
                 app.shutdown()
+
+    def test_managed_repositories_create_isolated_paths_and_reject_unsafe_urls(self):
+        with tempfile.TemporaryDirectory(prefix="fastlab-managed-repos-") as folder:
+            root = Path(folder)
+            apps = []
+            repositories = []
+            try:
+                for name in ("tenant-a", "tenant-b"):
+                    tenant = root / name
+                    repository_root = tenant / "repositories"
+                    app = FastLab(
+                        data_dir=tenant,
+                        repository_root=repository_root,
+                        agent_adapter=FakeAgentAdapter(),
+                        planner=None,
+                    )
+                    apps.append(app)
+                    repository = app.provision_repository("project")
+                    repositories.append((app, repository_root, repository))
+                    self.assertTrue(repository["available"])
+                    self.assertTrue(repository["has_commit"])
+                    self.assertTrue(repository["managed"])
+                    self.assertTrue(repository["deletable"])
+                    self.assertEqual(repository["source"], "created")
+                    self.assertEqual(repository["path"], repository["id"])
+                    stored = app.store.get_repository(repository["id"])
+                    self.assertEqual(Path(stored["path"]).parent, repository_root.resolve())
+
+                self.assertNotEqual(
+                    apps[0].store.get_repository(repositories[0][2]["id"])["path"],
+                    apps[1].store.get_repository(repositories[1][2]["id"])["path"],
+                )
+                active_app, active_root, active_repository = repositories[0]
+                with self.assertRaisesRegex(ValueError, "只能永久删除"):
+                    active_app.delete_repository(active_repository["id"])
+                active_path = Path(
+                    active_app.store.get_repository(active_repository["id"])["path"]
+                )
+                task_id = active_app.store.create_task(
+                    "active", "active", "", str(active_path), 1,
+                    repository_id=active_repository["id"],
+                )
+                with self.assertRaisesRegex(ValueError, "未结束任务"):
+                    active_app.delete_managed_repository(active_repository["id"])
+                self.assertTrue(active_path.is_dir())
+                active_app.store.update_task(task_id, status="failed")
+
+                deleted_app, _deleted_root, deleted_repository = repositories[1]
+                deleted_path = Path(
+                    deleted_app.store.get_repository(deleted_repository["id"])["path"]
+                )
+                deleted = deleted_app.delete_managed_repository(
+                    deleted_repository["id"]
+                )
+                self.assertTrue(deleted["deletedFiles"])
+                self.assertFalse(deleted_path.exists())
+                self.assertIsNone(
+                    deleted_app.store.get_repository(deleted_repository["id"])
+                )
+
+                restore_repository = active_app.provision_repository("restore-on-failure")
+                restore_path = Path(
+                    active_app.store.get_repository(restore_repository["id"])["path"]
+                )
+                with patch.object(
+                    active_app.store, "delete_repository",
+                    side_effect=RuntimeError("database failure"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "database failure"):
+                        active_app.delete_managed_repository(restore_repository["id"])
+                self.assertTrue(restore_path.is_dir())
+                self.assertIsNotNone(
+                    active_app.store.get_repository(restore_repository["id"])
+                )
+
+                outside = root / "outside-repository"
+                outside.mkdir()
+                outside_record = active_app.store.add_repository(
+                    "outside-record", str(outside)
+                )
+                with self.assertRaisesRegex(ValueError, "托管目录"):
+                    active_app.delete_managed_repository(outside_record["id"])
+                self.assertTrue(outside.is_dir())
+                for unsafe in (
+                    "file:///tmp/repo", "ssh://git@example.com/repo",
+                    "https://token@example.com/repo.git",
+                    "https://example.com/repo.git?token=secret",
+                ):
+                    with self.subTest(url=unsafe), self.assertRaisesRegex(ValueError, "HTTPS"):
+                        apps[0].provision_repository("unsafe-%s" % len(unsafe), unsafe)
+
+                before = {item.name for item in repositories[0][1].iterdir()}
+                with patch.object(apps[0], "_git", side_effect=RuntimeError("clone failed")):
+                    with self.assertRaisesRegex(ValueError, "克隆失败"):
+                        apps[0].provision_repository(
+                            "clone-failure", "https://example.com/repo.git"
+                        )
+                self.assertEqual(
+                    {item.name for item in repositories[0][1].iterdir()}, before
+                )
+                self.assertIsNone(apps[0].store.find_repository("clone-failure"))
+            finally:
+                for app in apps:
+                    app.shutdown()
 
     def test_docker_command_mounts_only_current_workspace_and_safe_assets(self):
         with tempfile.TemporaryDirectory(prefix="fastlab-docker-") as folder:

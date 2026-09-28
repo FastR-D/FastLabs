@@ -1,0 +1,51 @@
+name: Linux sandbox release gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      codex_version:
+        description: Exact approved @openai/codex version (never latest/range)
+        required: true
+        type: string
+      claude_version:
+        description: Exact approved @anthropic-ai/claude-code version (never latest/range)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Reject floating CLI versions
+        env:
+          CODEX_VERSION: ${{ inputs.codex_version }}
+          CLAUDE_VERSION: ${{ inputs.claude_version }}
+        run: |
+          case "$CODEX_VERSION" in *latest*|*\**|*\^*|*\~*|*" "*) exit 1;; esac
+          case "$CLAUDE_VERSION" in *latest*|*\**|*\^*|*\~*|*" "*) exit 1;; esac
+      - name: Install exact CLIs and sandbox dependencies
+        env:
+          CODEX_VERSION: ${{ inputs.codex_version }}
+          CLAUDE_VERSION: ${{ inputs.claude_version }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap socat
+          npm install --global "@openai/codex@$CODEX_VERSION" "@anthropic-ai/claude-code@$CLAUDE_VERSION"
+          python -m pip install --requirement requirements.txt
+          codex --version
+          claude --version
+      - name: Run fail-closed Linux isolation tests
+        env:
+          FASTLAB_REQUIRE_LINUX_SANDBOX_TESTS: "1"
+        run: python -m unittest tests.test_linux_sandbox -v

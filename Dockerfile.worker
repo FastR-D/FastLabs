@@ -1,12 +1,25 @@
 FROM node:22-bookworm-slim
 
-ARG CODEX_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
+# Both build arguments are deliberately required. Release builds must pass
+# exact approved versions; floating "latest" is rejected below.
+ARG CODEX_VERSION
+ARG CLAUDE_CODE_VERSION
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git python3 python3-venv ca-certificates curl \
-    && npm install -g "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+RUN test -n "${CODEX_VERSION}" \
+    && test -n "${CLAUDE_CODE_VERSION}" \
+    && case "${CODEX_VERSION}" in *latest*|*\**|*\^*|*\~*|*" "*) exit 1;; *) true;; esac \
+    && case "${CLAUDE_CODE_VERSION}" in *latest*|*\**|*\^*|*\~*|*" "*) exit 1;; *) true;; esac \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bubblewrap ca-certificates curl git python3 python3-venv socat \
+    && npm install -g \
+        "@openai/codex@${CODEX_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && rm -rf /var/lib/apt/lists/* /root/.npm
+
+ENV DISABLE_AUTOUPDATER=1 \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
 
 RUN mkdir -p /workspace /runtime /fastlab/schemas /fastlab/skills \
     && chmod 1777 /workspace /runtime

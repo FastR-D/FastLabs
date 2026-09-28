@@ -1,24 +1,55 @@
 [Unit]
-Description=FastLab multi-user task service
-After=docker.service network-online.target fastresearch.service
-Requires=docker.service
+Description=FastLab multi-user Agent task service
+Documentation=file:/srv/fastlab/app/docs/deployment.md
+Wants=network-online.target
+After=network-online.target fastresearch.service
+Requires=fastresearch.service
 
 [Service]
 Type=simple
 User=fastlab
 Group=fastlab
-SupplementaryGroups=docker
 WorkingDirectory=/srv/fastlab/app
 EnvironmentFile=/srv/fastlab/config/fastlab.env
-ExecStartPre=/usr/bin/docker image inspect fastlab-worker:latest
+Environment=HOME=/srv/fastlab/runtime/service
+Environment=TMPDIR=/srv/fastlab/runtime/tmp
+Environment=PATH=/opt/fastlab-cli/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DISABLE_AUTOUPDATER=1
+UMask=0077
+
+# Default process backend: fail before serving traffic if its fixed CLIs or
+# Linux sandbox prerequisites are unavailable. FastLab repeats these probes.
+ExecStartPre=/usr/bin/test -x /opt/fastlab-cli/bin/codex
+ExecStartPre=/usr/bin/test -x /opt/fastlab-cli/bin/claude
+ExecStartPre=/usr/bin/bwrap --version
+ExecStartPre=/usr/bin/socat -V
+ExecStartPre=/opt/fastlab-cli/bin/codex sandbox linux -- /bin/true
+ExecStartPre=/opt/fastlab-cli/bin/claude --version
 ExecStartPre=/usr/bin/curl --fail --silent http://127.0.0.1:8787/api/health
-ExecStart=/srv/fastlab/app/.venv/bin/python /srv/fastlab/app/server.py --data-dir /srv/fastlab/data
+ExecStart=/srv/fastlab/app/.venv/bin/python /srv/fastlab/app/server.py --data-dir /srv/fastlab/data --env-file /srv/fastlab/config/fastlab.env
+
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=45
+KillMode=control-group
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
-ReadWritePaths=/srv/fastlab/data /srv/fastlab/tenants
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/srv/fastlab/data /srv/fastlab/tenants /srv/fastlab/runtime
+ReadOnlyPaths=/srv/fastlab/app /opt/fastlab-cli
+LimitNOFILE=65536
+TasksMax=2048
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

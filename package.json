@@ -1,0 +1,9 @@
+{
+  "name": "fastlab",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:web",
+    "test:web": "node --test tests/frontend/*.test.mjs",
+    "test:e2e": "playwright test"
+  }
+}

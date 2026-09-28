@@ -131,8 +131,41 @@ class FastLabIntegrationTests(unittest.TestCase):
         self.assertIn("# FastLab Orchestration", planner["prompt"])
         self.assertIn("任务分配 Skill", task["documents"]["task.md"])
         self.assertNotIn("推荐 Skills", task["documents"]["task.md"])
-        with self.assertRaisesRegex(ValueError, "验收执行器"):
-            self.app.start_task(task["id"])
+        self.assertEqual(task["role_settings"]["verifier"]["executor"], "codex")
+
+    def test_user_agent_defaults_and_custom_skill_are_snapshotted(self):
+        self.app.shutdown()
+        self.adapter = FakeAgentAdapter()
+        self.app = FastLab(
+            self.repo, self.data, agent_adapter=self.adapter,
+            claude_bin=FAKE_CLAUDE, planner=None,
+        )
+        changed = self.app.update_executor_settings({
+            "planner": {"executor": "codex", "model": "fake-deep"},
+            "worker": {"executor": "codex", "model": "fake-fast"},
+            "verifier": {"executor": "codex", "model": "fake-deep"},
+        })
+        self.assertEqual(changed["preferences"]["planner"]["model"], "fake-deep")
+        skill = self.app.update_skill_settings(
+            "# User orchestration\n\nCUSTOM_TENANT_RULE\n"
+        )
+        self.assertTrue(skill["customized"])
+
+        task = self.create_planned_task("Use tenant settings")
+        planner = next(call for call in self.adapter.calls if "planner" in call["key"])
+        self.assertEqual(planner["model"], "fake-deep")
+        self.assertIn("CUSTOM_TENANT_RULE", planner["prompt"])
+        self.assertTrue(all(item["model"] == "fake-fast" for item in task["subtasks"]))
+        self.assertEqual(task["role_settings"]["verifier"]["model"], "fake-deep")
+        stored = self.app.store.get_task(task["id"], include_events=False)
+        self.assertEqual(stored["role_settings"]["skill"]["sha256"], skill["sha256"])
+
+        self.app.update_skill_settings("# Changed later\n")
+        self.assertIn(
+            "CUSTOM_TENANT_RULE", stored["role_settings"]["skill"]["content"]
+        )
+        reset = self.app.reset_skill_settings()
+        self.assertFalse(reset["customized"])
 
     def test_generated_subtask_content_and_executor_can_be_edited_before_start(self):
         task = self.create_planned_task()
@@ -369,6 +402,23 @@ class FastLabIntegrationTests(unittest.TestCase):
 
         self.app.delete_task(rerun["id"])
         self.assertIsNone(self.app.store.get_task(rerun["id"]))
+
+    def test_rename_task_updates_sidebar_payload_documents_and_events(self):
+        task = self.create_planned_task()
+
+        renamed = self.app.rename_task(task["id"], "  Renamed task  ")
+
+        self.assertEqual(renamed["title"], "Renamed task")
+        self.assertEqual(
+            next(item for item in self.app.list_payload() if item["id"] == task["id"])["title"],
+            "Renamed task",
+        )
+        self.assertIn("# Renamed task", renamed["documents"]["task.md"])
+        self.assertTrue(any(event["kind"] == "task.renamed" for event in renamed["events"]))
+        with self.assertRaisesRegex(ValueError, "不能为空"):
+            self.app.rename_task(task["id"], "  ")
+        with self.assertRaisesRegex(ValueError, "80"):
+            self.app.rename_task(task["id"], "x" * 81)
 
     def test_continue_task_uses_current_delivered_head_and_keeps_parent_read_only(self):
         task = self.prepare_task()
@@ -848,12 +898,16 @@ class PlannerBackendTests(unittest.TestCase):
             repo = initialize_repo(root / "repo")
             data = root / "data"
             codex = FakeAgentAdapter()
-            claude_planner_adapter = ClaudeCLIAdapter(str(FAKE_CLAUDE), models=["fake-claude"])
             app = FastLab(
                 repo, data, agent_adapter=codex, claude_bin=FAKE_CLAUDE,
-                planner=cli_planner(claude_planner_adapter, "claude", "fake-claude"),
+                planner=None,
             )
             try:
+                app.update_executor_settings({
+                    "planner": {"executor": "claude", "model": "fake-claude"},
+                    "worker": {"executor": "claude", "model": "sonnet"},
+                    "verifier": {"executor": "claude", "model": "sonnet"},
+                })
                 task = app.create_task("Claude dispatch", "Use planned executor", "", 1)
                 deadline = time.time() + 8
                 while time.time() < deadline:
@@ -862,7 +916,7 @@ class PlannerBackendTests(unittest.TestCase):
                         break
                     time.sleep(0.05)
                 self.assertEqual(task["subtasks"][0]["executor"], "claude")
-                app.update_task_verifier(task["id"], "claude", model="sonnet")
+                self.assertEqual(task["role_settings"]["planner"]["executor"], "claude")
                 app.start_task(task["id"])
                 deadline = time.time() + 12
                 while time.time() < deadline:
@@ -954,6 +1008,9 @@ class ValidationTests(unittest.TestCase):
 
     def test_web_poll_preserves_drafts_and_mobile_settings_is_reachable(self):
         app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        render_js = (ROOT / "web" / "modules" / "render.js").read_text(
+            encoding="utf-8"
+        )
         index_html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         styles = (ROOT / "web" / "styles.css").read_text(encoding="utf-8")
         self.assertIn("mainDirty", app_js)
@@ -994,8 +1051,21 @@ class ValidationTests(unittest.TestCase):
         self.assertIn('data-task-panel="documents"', app_js)
         self.assertIn('data-action="settings"', index_html)
         self.assertIn(".mobile-settings-button", styles)
-        self.assertNotIn('name="plannerModel"', app_js)
-        self.assertIn("在 <code>fastlab.env</code> 中修改", app_js)
+        self.assertIn('name="plannerModel"', app_js)
+        self.assertIn('name="workerModel"', app_js)
+        self.assertIn('id="skill-settings-form"', app_js)
+        self.assertIn('<select name="${role}Model"', render_js)
+        self.assertNotIn('<input name="${role}Model"', render_js)
+        self.assertIn("CLI 默认模型", render_js)
+        self.assertIn('name="cloneUrl"', render_js)
+        self.assertIn("存储位置由 FastLab 自动管理", render_js)
+        self.assertIn('data-action="delete-managed-repository"', app_js)
+        self.assertIn("永久删除仓库", app_js)
+        self.assertIn('data-action="settings-back"', app_js)
+        self.assertIn('data-action="settings-section"', app_js)
+        self.assertIn('class="settings-nav"', app_js)
+        self.assertIn(".settings-layout", styles)
+        self.assertNotIn("在 <code>fastlab.env</code> 中修改", app_js)
         self.assertNotIn("一个计划", app_js)
         self.assertNotIn("LOCAL ORCHESTRATION", app_js)
         self.assertNotIn("LOCAL WORKSPACE", index_html)

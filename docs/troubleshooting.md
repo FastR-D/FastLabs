@@ -1,5 +1,11 @@
 # 常见问题
 
+## 启动提示不支持 `FEISHU_*` 配置
+
+飞书功能已移除，环境白名单会拒绝旧 `FEISHU_APP_ID` 等键。从活动 `fastlab.env` 删除全部
+`FEISHU_*` 后重启；不要修改代码去忽略或重新启用它们。需要审计留存时，把旧值迁移到受控
+密钥归档，不能继续放在 FastLab 配置中。
+
 ## `HEAD` 未知或有歧义
 
 错误类似：
@@ -8,7 +14,9 @@
 fatal: ambiguous argument 'HEAD': unknown revision or path
 ```
 
-目标目录还没有初始提交。进入网页“设置”，在仓库旁点击“创建初始提交”；非 Git 文件夹首次登记时，也可以确认让 FastLab 一键初始化。执行前检查 `.gitignore`，避免提交敏感文件。
+目标仓库还没有初始提交。多用户模式中新建空仓库或克隆空远程仓库时，FastLab 会自动创建
+初始提交；显式 `--workspace` 的旧 local 兼容模式可进入“设置 → 仓库管理”，在仓库旁点击“创建初始提交”。执行前检查
+`.gitignore`，避免提交敏感文件。
 
 ## 目标仓库存在未提交改动
 
@@ -25,7 +33,20 @@ codex --version
 claude --version
 ```
 
-确认 CLI 已安装、已登录，并且 `.fastlab/fastlab.env` 中的 `FASTLAB_CODEX_BIN`、`FASTLAB_CLAUDE_BIN` 指向正确命令。某个 CLI 不存在只会让对应 Planner 或执行器显示不可用，不应阻止 FastLab 网站启动。
+确认固定版本 CLI 已安装，并且环境文件中的 `FASTLAB_CODEX_BIN`、`FASTLAB_CLAUDE_BIN` 指向正确命令。`local` 开发模式可以只把缺失执行器显示为不可用；`research` 生产模式的 Runner 启动检查若发现所需 CLI 或严格沙箱不可用，必须失败关闭，不能静默用无沙箱方式启动。
+
+若 CLI 已安装但任务提示未登录，先确认设置页对应 Provider 选择了“CLI 登录”，再检查当前
+用户自己的 `runtime/codex` 或 `runtime/claude`，不要检查或复制服务账号的普通 HOME。若选择
+“个人 API Key”，需先保存对应 Key；删除 Key 后认证方式会自动切回 CLI。
+
+默认直连部署还应检查：
+
+```bash
+bwrap --version
+socat -V
+```
+
+若组织临时无法满足 Linux 沙箱门禁，应切换已验证的 Docker/VM 后端，而不是加入危险权限参数。
 
 ## Claude 命令被拦截
 

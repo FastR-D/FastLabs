@@ -1,31 +1,49 @@
 # Claude 执行权限
 
-## 默认策略
+## 生产默认策略
 
-新版 Claude CLI 下，Planner 和验收 Agent 使用 `dontAsk`：允许的只读和测试命令直接执行，其他命令直接拒绝，不会等待人工审批；Claude Worker 使用 `auto`，由 Claude 自动判断 Worktree 内的本地操作。
+FastLab 以 `claude -p` 非交互模式启动 Claude，不使用
+`--dangerously-skip-permissions`、`bypassPermissions` 或自动退出沙箱重试。默认直连 Runner 与
+Claude 配置共同强制：
 
-服务器模式使用管理员 Worker 镜像中的 Claude CLI，并固定采用现代 `auto` / `dontAsk` 权限模式；本地兼容模式仍会读取本机 `claude --help` 并安全回退。FastLab 在任何模式中都不会使用 `--dangerously-skip-permissions` 或 `bypassPermissions`。
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false
+  },
+  "permissions": {
+    "blockReadsOutsideWorkingDirectories": true
+  }
+}
+```
 
-服务器模式首先使用 FastLab Docker 边界，再为 Claude Worker 启用 Claude Code 自带的 Bash 沙箱：
+同时：
 
-- Bash 命令只能写当前任务 Worktree 和会话临时目录。
-- 命令不能自动退出沙箱重试。
-- 普通本地构建、测试和格式化命令由 `auto` 模式判断，可在沙箱内无人值守运行。
-- 宿主机其他用户目录、FastLab 数据库、Docker socket 和 HOME 不会挂载到容器。
+- Planner 工作目录固定为当前租户登记仓库，Worker/Verifier 固定为当前任务 Worktree；
+- Claude 使用租户独立 `runtime/claude/{home,tmp,config,cache,data}`；
+- 只注入当前用户的 Anthropic 凭证，不注入 OpenAI Key、主密钥或 FastResearch 配置；
+- 固定禁用自动更新、非必要流量并清理下游子进程环境；
+- 项目 MCP、hooks 和非必要插件禁用；
+- Linux 缺少 `bubblewrap`/`socat` 或沙箱不可用时，生产启动/运行失败关闭。
 
-本地兼容模式下，原生 Windows 不支持 Claude Code 的 Bash 系统沙箱；需要系统沙箱时，应在 WSL2 中运行。
+Planner 和 Verifier 采用只读工具策略；Worker 只允许完成任务所需的文件操作和精确 Bash 规则。
+Claude 的 Bash 沙箱不应被当作覆盖所有文件工具、MCP 和 hook 的完整边界，详见
+[安全模型](security.md)。
 
 ## 增加必要命令
 
-如果任务日志明确显示某个必要命令被权限策略拦截，可以在 `.fastlab/fastlab.env` 中追加精确规则：
+任务日志明确显示必要命令被工具规则拦截时，管理员可以加入精确规则：
 
 ```ini
 FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS=["Bash(npm run *)","Bash(npx vitest *)","Bash(python -m pytest *)"]
 ```
 
-保存后重启 FastLab。该配置必须是 JSON 字符串数组。
+配置是 JSON 字符串数组，重启后生效。裸 `Bash`、`Bash(*)`、含换行规则和危险绕过会被拒绝。
+额外规则不会扩大租户路径、系统沙箱或 Provider 环境边界。
 
-常见规则示例：
+常见可评审规则：
 
 ```text
 Bash(npm run *)
@@ -36,13 +54,16 @@ Bash(cargo test *)
 Bash(go test *)
 ```
 
-额外规则只应用于写任务，不会扩大 Planner 或验收 Agent 的只读工具范围。FastLab 拒绝裸 `Bash` 和 `Bash(*)`；规则也不能扩大 Docker 挂载边界。
+依赖安装会执行第三方脚本、修改缓存并可能需要公网。首选由用户/管理员在任务前按锁文件安装；
+不要为了单次安装开放全部 Bash、宿主 HOME 或 Worktree 外目录。
 
-## 仍然被拦截时
+## 排障
 
-先在日志中区分两类问题：
+1. **工具规则拒绝**：日志列出具体命令；评审后增加最窄精确规则。
+2. **系统沙箱拒绝**：访问 Worktree 外目录、系统服务或网络；额外 Bash 规则不应扩大边界。
+3. **沙箱不可用**：检查 `bubblewrap`、`socat`、user namespaces 和固定 Claude 版本，不能回退
+   到无沙箱。
+4. **项目 MCP/hook 被拒绝**：这是生产安全策略，不应为单个任务临时开放。
 
-1. **权限规则拒绝**：错误会列出具体命令，并提示 `FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS`；增加精确规则通常可以解决。
-2. **系统沙箱拒绝**：命令需要访问网络、Worktree 外目录、Docker、浏览器或系统服务。额外 Bash 规则不会扩大系统沙箱边界，应先判断这项访问是否必要。
-
-依赖安装通常需要网络，也会修改缓存目录。首选在任务开始前由用户安装依赖；不要为了让一次安装通过而开放全部 Bash 或主目录写权限。
+每次 Claude/OS 升级后重跑 Linux sentinel 门禁。任何跨租户或配置读取成功都要求切换
+Docker/VM。
