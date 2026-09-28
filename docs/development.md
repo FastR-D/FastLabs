@@ -2,7 +2,7 @@
 
 ## 开发原则
 
-- 只通过根目录兼容入口支持旧调用；新实现导入 `fastlab.*` 聚焦模块。
+- 统一从 `fastlab.*` 导入实现；根目录 `server.py` 仅负责启动。
 - 保持 HTTP、SQLite、状态、事件、文档和 Git 外部行为，重构与行为变更分开提交。
 - 领域服务不导入 HTTP；Runner 不写数据库；Store 不启动 Agent；前端不复制后端状态机。
 - 不在失败路径静默降低安全策略，不用宽泛异常掩盖取消、超时或数据损坏。
@@ -47,7 +47,7 @@ CI 还会在 Python 3.10/3.13、Node 22 上执行 Ruff、coverage、Playwright �
 
 ## 新增或修改路由
 
-1. 在 HTTP 层解析请求，调用 `FastLab` 兼容门面或应用服务；不要在 Handler 中实现 Git/调度。
+1. 在 HTTP 层解析请求，调用 `FastLab` 应用服务；不要在 Handler 中实现 Git/调度。
 2. 复用统一 JSON、错误、认证和同源检查。
 3. 更新 [API 契约](api.md)。
 4. 增加成功、校验、未知 ID、未认证、CSRF 和 JSON Golden 测试。

@@ -349,18 +349,15 @@ function renderSkillSettings(skill) {
 }
 
 function renderRepositorySettings() {
-  const managed = state.repositoryManagement?.mode === "managed";
-  const form = managed
-    ? `<form class="settings-body repository-form managed-repository-form" id="repository-form">
+  const form = `<form class="settings-body repository-form managed-repository-form" id="repository-form">
         <div class="field"><label>仓库名称</label><input name="alias" required maxlength="40" pattern="[a-zA-Z0-9._-]+" placeholder="my-repo"></div>
         <div class="field"><label>Git HTTPS URL <span class="field-hint">可选</span></label><input name="cloneUrl" type="url" inputmode="url" placeholder="https://github.com/org/repo.git"></div>
         <button class="primary-button" type="submit">创建仓库</button>
-      </form>`
-    : `<form class="settings-body repository-form" id="repository-form"><div class="field"><label>别名</label><input name="alias" required placeholder="my-repo"></div><div class="field"><label>本地仓库路径</label><input name="path" required placeholder="/path/to/project"></div><button class="primary-button" type="submit">登记仓库</button></form>`;
-  return `<header class="settings-section-heading"><div><h2>仓库管理</h2><p>${managed ? "创建空仓库或从 HTTPS Git URL 克隆，存储位置由 FastLab 自动管理。" : "登记本地开发环境中的现有 Git 仓库。"}</p></div><span>${state.repositories.length} 个</span></header>
+      </form>`;
+  return `<header class="settings-section-heading"><div><h2>仓库管理</h2><p>创建空仓库或从 HTTPS Git URL 克隆，存储位置由 FastLab 自动管理。</p></div><span>${state.repositories.length} 个</span></header>
     <article class="panel">
       ${form}
-      <div class="repository-list">${state.repositories.map((item) => `<article class="repository-row"><div><strong>${escapeHtml(item.alias)}</strong>${item.is_default ? '<span class="default-badge">默认</span>' : ""}<p>${managed ? (item.source === "clone" ? "从远程仓库克隆" : "FastLab 创建的空仓库") : escapeHtml(item.path)}</p>${item.error ? `<span class="repository-error">${escapeHtml(item.error)}</span>` : ""}</div><div class="repository-actions">${item.initializable ? `<button class="quiet-button" data-action="initialize-repository" data-repository-id="${item.id}">创建初始提交</button>` : ""}${item.is_default ? "" : `<button class="quiet-button" data-action="default-repository" data-repository-id="${item.id}">设为默认</button>`}${managed ? "" : `<button class="quiet-button" data-action="delete-repository" data-repository-id="${item.id}">移除记录</button>`}${item.deletable ? `<button class="danger-button" data-action="delete-managed-repository" data-repository-id="${item.id}">永久删除仓库</button>` : ""}</div></article>`).join("") || '<div class="empty-panel">暂无仓库</div>'}</div>
+      <div class="repository-list">${state.repositories.map((item) => `<article class="repository-row"><div><strong>${escapeHtml(item.alias)}</strong>${item.is_default ? '<span class="default-badge">默认</span>' : ""}<p>${item.source === "clone" ? "从远程仓库克隆" : "FastLab 创建的空仓库"}</p>${item.error ? `<span class="repository-error">${escapeHtml(item.error)}</span>` : ""}</div><div class="repository-actions">${item.initializable ? `<button class="quiet-button" data-action="initialize-repository" data-repository-id="${item.id}">创建初始提交</button>` : ""}${item.is_default ? "" : `<button class="quiet-button" data-action="default-repository" data-repository-id="${item.id}">设为默认</button>`}${item.deletable ? `<button class="danger-button" data-action="delete-managed-repository" data-repository-id="${item.id}">永久删除仓库</button>` : ""}</div></article>`).join("") || '<div class="empty-panel">暂无仓库</div>'}</div>
     </article>`;
 }
 

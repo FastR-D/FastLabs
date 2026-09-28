@@ -2,7 +2,6 @@
 
 from fastlab.contracts import ExecutionRunner
 
-from .docker import DockerCommandRunner
 from .process import ProcessCommandRunner
 
-__all__ = ["DockerCommandRunner", "ExecutionRunner", "ProcessCommandRunner"]
+__all__ = ["ExecutionRunner", "ProcessCommandRunner"]

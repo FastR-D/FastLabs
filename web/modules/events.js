@@ -98,31 +98,13 @@ export function bindEvents(documentRef = document) {
         toast(mode === "cli" ? "已使用 CLI 登录。" : "API Key 认证设置已保存。", "success");
         await refresh();
       } else if (form.id === "repository-form") {
-        const managed = state.repositoryManagement?.mode === "managed";
-        const repository = managed
-          ? { alias: data.get("alias"), cloneUrl: String(data.get("cloneUrl") || "").trim() }
-          : { alias: data.get("alias"), path: data.get("path") };
-        let initialized = false;
-        try {
-          await api("/api/repositories", { method: "POST", body: JSON.stringify(repository) });
-        } catch (error) {
-          if (error.code !== "repository_initialization_required") throw error;
-          const confirmed = window.confirm(`${error.message}\n\nFastLab 会把未被 .gitignore 忽略的现有文件加入首次提交。请先确认目录中没有不应提交的敏感文件。`);
-          if (!confirmed) return;
-          await api("/api/repositories", {
-            method: "POST",
-            body: JSON.stringify({ ...repository, initialize: true }),
-          });
-          initialized = true;
-        }
+        const repository = {
+          alias: data.get("alias"), cloneUrl: String(data.get("cloneUrl") || "").trim(),
+        };
+        await api("/api/repositories", { method: "POST", body: JSON.stringify(repository) });
         state.mainDirty = false;
         form.reset();
-        toast(
-          managed
-            ? (repository.cloneUrl ? "仓库已克隆。" : "空仓库已创建。")
-            : (initialized ? "仓库已初始化并添加。" : "仓库已添加。"),
-          "success",
-        );
+        toast(repository.cloneUrl ? "仓库已克隆。" : "空仓库已创建。", "success");
         await refresh();
       }
     } catch (error) {
@@ -392,11 +374,6 @@ export function bindEvents(documentRef = document) {
         if (!confirmed) return;
         await api(`/api/repositories/${button.dataset.repositoryId}/initialize`, { method: "POST", body: "{}" });
         toast("初始提交已创建。", "success");
-      }
-      if (action === "delete-repository") {
-        if (!window.confirm("移除这个外部仓库的登记？仓库文件不会被删除。")) return;
-        await api(`/api/repositories/${button.dataset.repositoryId}`, { method: "DELETE" });
-        toast("外部仓库登记已移除，磁盘文件未改动。", "success");
       }
       if (action === "delete-managed-repository") {
         const item = state.repositories.find(

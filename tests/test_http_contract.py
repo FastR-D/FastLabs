@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastlab.errors import RepositoryInitializationRequired
 from fastlab.http_server import FastLabHandler
 
 
@@ -130,7 +129,7 @@ class HttpRouteContractTests(unittest.TestCase):
     def test_all_post_routes_keep_status_and_dispatch_contract(self):
         body = {
             "title": "Title", "goal": "Goal", "constraints": "",
-            "maxConcurrency": 2, "workspace": "repo", "repositoryId": "repo-1",
+            "maxConcurrency": 2, "repositoryId": "repo-1",
             "workingSubdir": "web", "feedback": "revise", "message": "more",
             "evidence": "checked", "executor": "codex", "model": "model",
             "reasoningEffort": "high", "alias": "repo",
@@ -191,7 +190,6 @@ class HttpRouteContractTests(unittest.TestCase):
             "/api/settings/skill": "reset_skill_settings",
             "/api/tasks/abcdef/events": "clear_task_logs",
             "/api/tasks/abcdef": "delete_task",
-            "/api/repositories/abcdef": "delete_repository",
             "/api/repositories/abcdef/managed": "delete_managed_repository",
         }
         for path, called in delete_routes.items():
@@ -214,18 +212,23 @@ class HttpRouteContractTests(unittest.TestCase):
             "PUT", "/api/repositories/abcdef", {"alias": "x", "path": "x"}
         )
         self.assertEqual(status, 400)
-        self.assertIn("不能修改仓库路径", payload["error"])
+        self.assertIn("不能修改托管仓库路径", payload["error"])
 
-    def test_local_path_mode_keeps_initialization_error_contract(self):
-        candidate = Path(self.temp.name) / "new-repo"
-        self.backend.repository_root = None
-        self.backend.failure = RepositoryInitializationRequired(candidate, "not_git")
-        status, payload = self.request(
-            "POST", "/api/repositories", {"alias": "x", "path": str(candidate)}
-        )
-        self.assertEqual(status, 409)
-        self.assertEqual(payload["code"], "repository_initialization_required")
-        self.assertEqual(payload["reason"], "not_git")
+    def test_legacy_paths_and_record_only_delete_are_rejected(self):
+        for value in ("/tmp/project", "", None):
+            with self.subTest(workspace=value):
+                self.backend.calls.clear()
+                status, payload = self.request(
+                    "POST", "/api/tasks", {"goal": "Goal", "workspace": value}
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("repositoryId", payload["error"])
+                self.assertEqual(self.backend.calls, [])
+        self.backend.calls.clear()
+        status, _ = self.request("DELETE", "/api/repositories/abcdef")
+        self.assertEqual(status, 404)
+        self.assertEqual(self.backend.calls, [])
+
 
 
 if __name__ == "__main__":

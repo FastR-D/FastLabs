@@ -14,7 +14,7 @@ export async function refresh({ keepPage = true, renderMain = true, respectEditi
   state.tasks = tasks.tasks;
   state.repositories = repositoryPayload.repositories;
   state.repositoryManagement = repositoryPayload.management || {
-    mode: "local_path", acceptsPath: true, acceptsCloneUrl: false,
+    mode: "managed", acceptsPath: false, acceptsCloneUrl: true,
   };
   state.settings = settings;
   state.health = health;

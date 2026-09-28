@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the compatibility entry point and verify its anonymous health API."""
+"""Start the service entry point and verify its anonymous health API."""
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ def main() -> int:
     port = available_port()
     environment = dict(os.environ)
     environment["FASTLAB_AUTH_MODE"] = "local"
-    environment["FASTLAB_EXECUTION_BACKEND"] = "process"
     with tempfile.TemporaryDirectory(prefix="fastlab-deploy-smoke-") as data_dir:
         process = subprocess.Popen(
             [

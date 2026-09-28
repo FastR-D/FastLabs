@@ -11,10 +11,12 @@ from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet
 
-from multitenancy import (
-    DockerCommandRunner, Principal, ResearchAuthenticator, TenantRegistry,
-)
-from server import AgentRunGate, FastLab, FastLabHandler, FastLabService, ThreadingHTTPServer
+from fastlab.tenant_registry import Principal, TenantRegistry
+from fastlab.integrations.fastresearch import ResearchAuthenticator
+from fastlab.scheduling import AgentRunGate
+from fastlab.application import FastLab
+from fastlab.http_server import FastLabHandler, ThreadingHTTPServer
+from fastlab.tenancy import FastLabService
 from fake_adapter import FakeAgentAdapter
 
 
@@ -92,16 +94,16 @@ class MultiTenantTests(unittest.TestCase):
                 agent_adapter=FakeAgentAdapter(), planner=None,
             )
             try:
-                with self.assertRaisesRegex(ValueError, "相对路径"):
-                    app.add_repository("outside", str(root))
-                with self.assertRaisesRegex(ValueError, "相对路径"):
-                    app.add_repository("parent", "../other")
+                with self.assertRaisesRegex(ValueError, "越出"):
+                    app._resolve_workspace(root)
+                with self.assertRaisesRegex(ValueError, "越出"):
+                    app._resolve_workspace(repositories / "../other")
                 outside = root / "outside"
                 outside.mkdir()
                 link = repositories / "link"
                 link.symlink_to(outside, target_is_directory=True)
                 with self.assertRaisesRegex(ValueError, "越出"):
-                    app.add_repository("link", "link")
+                    app._resolve_workspace(link)
             finally:
                 app.shutdown()
 
@@ -137,8 +139,6 @@ class MultiTenantTests(unittest.TestCase):
                     apps[1].store.get_repository(repositories[1][2]["id"])["path"],
                 )
                 active_app, active_root, active_repository = repositories[0]
-                with self.assertRaisesRegex(ValueError, "只能永久删除"):
-                    active_app.delete_repository(active_repository["id"])
                 active_path = Path(
                     active_app.store.get_repository(active_repository["id"])["path"]
                 )
@@ -187,6 +187,10 @@ class MultiTenantTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "托管目录"):
                     active_app.delete_managed_repository(outside_record["id"])
                 self.assertTrue(outside.is_dir())
+                with self.assertRaisesRegex(ValueError, "托管目录"):
+                    active_app.initialize_repository(outside_record["id"])
+                self.assertFalse((outside / ".git").exists())
+                self.assertFalse(active_app._repository_status(outside_record)["initializable"])
                 for unsafe in (
                     "file:///tmp/repo", "ssh://git@example.com/repo",
                     "https://token@example.com/repo.git",
@@ -208,33 +212,6 @@ class MultiTenantTests(unittest.TestCase):
             finally:
                 for app in apps:
                     app.shutdown()
-
-    def test_docker_command_mounts_only_current_workspace_and_safe_assets(self):
-        with tempfile.TemporaryDirectory(prefix="fastlab-docker-") as folder:
-            tenant = Path(folder) / "tenant"
-            workspace = tenant / "worktrees" / "task" / "sub"
-            workspace.mkdir(parents=True)
-            (tenant / "runtime").mkdir()
-            runner = DockerCommandRunner(
-                "fastlab-worker:test", tenant, ROOT, lambda _provider: "sk-user-only"
-            )
-            command, cwd, environment = runner.wrap(
-                ["codex", "exec", "-C", str(workspace), "-o", str(tenant / "runtime" / "out")],
-                workspace, writable=True, executor="codex",
-            )
-            joined = " ".join(command)
-            self.assertIn("--read-only", command)
-            self.assertIn("--cap-drop=ALL", command)
-            self.assertIn("--security-opt=no-new-privileges", command)
-            self.assertIn("dst=/workspace,rw", joined)
-            self.assertIn("dst=/fastlab/schemas,readonly", joined)
-            self.assertIn("dst=/fastlab/skills,readonly", joined)
-            self.assertNotIn("docker.sock", joined)
-            self.assertNotIn(str(ROOT / ".fastlab"), joined)
-            self.assertNotIn("src=%s,dst=" % Path.home(), joined)
-            self.assertNotIn("sk-user-only", joined)
-            self.assertEqual(environment["OPENAI_API_KEY"], "sk-user-only")
-            self.assertEqual(Path(cwd), workspace.resolve())
 
     def test_global_and_tenant_gates_both_bound_runs(self):
         global_gate = AgentRunGate(2)
@@ -273,10 +250,9 @@ class MultiTenantTests(unittest.TestCase):
                 "FASTLAB_PUBLIC_PATH": "/lab",
                 "FASTLAB_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode(),
                 "FASTLAB_TENANT_ROOT": str(root / "tenants"),
-                "FASTLAB_WORKER_IMAGE": "fastlab-worker:test",
             }
             with patch.dict(os.environ, environment, clear=False):
-                service = FastLabService(root / "data", check_worker_image=False)
+                service = FastLabService(root / "data", check_dependencies=False)
                 try:
                     alice = service.app_for(Principal("account-a", "Alice", "a"))
                     bob = service.app_for(Principal("account-b", "Bob", "b"))
@@ -296,10 +272,9 @@ class MultiTenantTests(unittest.TestCase):
                 "FASTLAB_PUBLIC_PATH": "/lab",
                 "FASTLAB_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode(),
                 "FASTLAB_TENANT_ROOT": str(root / "tenants"),
-                "FASTLAB_WORKER_IMAGE": "fastlab-worker:test",
             }
             with patch.dict(os.environ, environment, clear=False):
-                service = FastLabService(root / "data", check_worker_image=False)
+                service = FastLabService(root / "data", check_dependencies=False)
             identities = {
                 "fr_session=alice": Principal("account-a", "Alice", "alice"),
                 "fr_session=bob": Principal("account-b", "Bob", "bob"),

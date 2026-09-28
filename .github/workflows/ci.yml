@@ -32,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --requirement requirements.txt coverage ruff
       - name: Ruff correctness checks
-        run: ruff check fastlab server.py agent_adapter.py multitenancy.py tests deploy
+        run: ruff check fastlab server.py tests deploy
       - name: Python tests and coverage
         run: |
           set -o pipefail

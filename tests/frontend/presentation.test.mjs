@@ -54,7 +54,7 @@ test("state factory returns isolated mutable state and labels remain stable", ()
   assert.deepEqual(second.taskViews, {});
   assert.equal(second.settingsSection, "agents");
   assert.equal(second.settingsOrigin, null);
-  assert.equal(second.repositoryManagement.mode, "local_path");
+  assert.equal(second.repositoryManagement.mode, "managed");
   assert.equal(statusLabels.awaiting_approval, "等待确认");
   assert.equal(plannerLabel({ backend: "claude" }), "Claude CLI");
   assert.equal(plannerLabel({ backend: "codex" }), "Codex CLI");

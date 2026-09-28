@@ -31,11 +31,10 @@ from .config import (
     APP_ROOT, DEFAULT_GLOBAL_CONCURRENCY, EFFORTS, EXECUTOR_LABELS,
     MAX_GLOBAL_CONCURRENCY, PLANNER_SCHEMA, PLANNER_SKILL, compact_error,
     parse_agent_timeout, parse_claude_extra_allowed_tools, resolve_executable,
-    slug, utc_now,
+    slug, utc_now, validate_execution_environment,
 )
 from .errors import (
     AgentRunCancelled, DeliveryReverificationRequired,
-    RepositoryInitializationRequired,
 )
 from .documents import DocumentProjector
 from .git_service import GitService
@@ -48,19 +47,19 @@ from .storage import Store
 
 
 class FastLab:
-    def __init__(self, workspace=None, data_dir=None, codex_bin=None, agent_adapter=None,
+    def __init__(self, *, data_dir=None, codex_bin=None, agent_adapter=None,
                  claude_bin=None, planner=None, repository_root=None,
                  command_runner=None, shared_agent_gate=None, tenant_limit=None,
                  credential_available=None, redactor=None):
+        validate_execution_environment()
         self.workspace = None
         self.default_repository_id = None
         self.data_dir = Path(data_dir or APP_ROOT / ".fastlab").expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.repository_root = (
-            Path(repository_root).expanduser().resolve() if repository_root else None
+            Path(repository_root or self.data_dir / "repositories").expanduser().resolve()
         )
-        if self.repository_root:
-            self.repository_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.repository_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.command_runner = command_runner
         self.credential_available = credential_available or (lambda _provider: True)
         self.allowed_models = {
@@ -83,7 +82,7 @@ class FastLab:
         self.git_bin = shutil.which("git")
         self.git_service = GitService(self.git_bin)
         self._validate_environment()
-        self._initialize_repositories(workspace)
+        self._initialize_repositories()
         self.git_service.set_default_workspace(self.workspace)
         codex_adapter = None
         if agent_adapter is not None:
@@ -274,18 +273,7 @@ class FastLab:
         if self.git_bin is None:
             raise ValueError("找不到 Git，请先安装 Git 并重新打开终端。")
 
-    def _initialize_repositories(self, workspace):
-        if workspace:
-            resolved = self._resolve_workspace(workspace)
-            existing = self.store.find_repository(str(resolved))
-            if existing:
-                self.store.update_repository(
-                    existing["id"], existing["alias"], existing["path"], is_default=True
-                )
-            else:
-                self.store.add_repository(
-                    self._available_alias(resolved.name), str(resolved), is_default=True
-                )
+    def _initialize_repositories(self):
         self._migrate_task_repositories()
         self._sync_default_repository()
 
@@ -338,11 +326,10 @@ class FastLab:
         if source is None:
             raise ValueError("尚未登记 Git 仓库，请先在设置页添加仓库。")
         workspace = Path(source).expanduser().resolve()
-        if self.repository_root:
-            try:
-                workspace.relative_to(self.repository_root)
-            except ValueError as exc:
-                raise ValueError("仓库目录越出当前用户空间。") from exc
+        try:
+            workspace.relative_to(self.repository_root)
+        except ValueError as exc:
+            raise ValueError("仓库目录越出当前用户空间。") from exc
         if not workspace.is_dir():
             raise ValueError("工作目录不存在：%s" % workspace)
         inside = self._git(
@@ -354,11 +341,10 @@ class FastLab:
         if not root:
             raise ValueError("无法确定 Git 仓库根目录：%s" % workspace)
         resolved = Path(root).expanduser().resolve()
-        if self.repository_root:
-            try:
-                resolved.relative_to(self.repository_root)
-            except ValueError as exc:
-                raise ValueError("Git 根目录越出当前用户空间。") from exc
+        try:
+            resolved.relative_to(self.repository_root)
+        except ValueError as exc:
+            raise ValueError("Git 根目录越出当前用户空间。") from exc
         return resolved
 
     def _git(self, arguments, cwd=None, check=True, timeout=None):
@@ -497,9 +483,9 @@ class FastLab:
 
     def repository_management(self):
         return {
-            "mode": "managed" if self.repository_root else "local_path",
-            "acceptsPath": not bool(self.repository_root),
-            "acceptsCloneUrl": bool(self.repository_root),
+            "mode": "managed",
+            "acceptsPath": False,
+            "acceptsCloneUrl": True,
         }
 
     def _repository_status(self, repository):
@@ -526,35 +512,29 @@ class FastLab:
                 "initializable": path.is_dir(),
                 "error": compact_error(exc, 240),
             })
-        if self.repository_root:
-            try:
-                result["path"] = str(Path(repository["path"]).resolve().relative_to(self.repository_root))
-            except ValueError:
-                result["path"] = ""
-            origin = None
-            if result.get("available"):
-                origin = self._git(
-                    ["remote", "get-url", "origin"], cwd=repository["path"], check=False
-                )
-            result["source"] = (
-                "clone" if origin and origin.returncode == 0 and origin.stdout.strip()
-                else "created"
+        try:
+            result["path"] = str(Path(repository["path"]).resolve().relative_to(self.repository_root))
+        except ValueError:
+            result["path"] = ""
+        origin = None
+        if result.get("available"):
+            origin = self._git(
+                ["remote", "get-url", "origin"], cwd=repository["path"], check=False
             )
-            result["managed"] = True
-            try:
-                self._managed_repository_path(repository)
-                result["deletable"] = True
-            except (OSError, ValueError):
-                result["deletable"] = False
-        else:
-            result["source"] = "local_path"
-            result["managed"] = False
+        result["source"] = (
+            "clone" if origin and origin.returncode == 0 and origin.stdout.strip()
+            else "created"
+        )
+        result["managed"] = True
+        try:
+            self._managed_repository_path(repository)
+            result["deletable"] = True
+        except (OSError, ValueError):
             result["deletable"] = False
+            result["initializable"] = False
         return result
 
     def _managed_repository_path(self, repository):
-        if not self.repository_root:
-            raise ValueError("当前仓库不是 FastLab 托管仓库。")
         stored = Path(repository["path"])
         if stored.is_symlink():
             raise ValueError("托管仓库目录不能是符号链接。")
@@ -600,8 +580,6 @@ class FastLab:
         return clone_url
 
     def provision_repository(self, alias, clone_url="", is_default=False):
-        if not self.repository_root:
-            raise ValueError("当前模式不支持托管仓库，请登记本地路径。")
         alias = self._validate_repository_alias(alias)
         clone_url = self._validate_clone_url(clone_url)
         with self.repository_lock:
@@ -654,42 +632,6 @@ class FastLab:
                 self.workspace = Path(result["path"])
             return {**self._repository_status(result), "provisioned": True}
 
-    def _repository_path_for_add(self, path, initialize=False):
-        raw_path = str(path or "").strip()
-        if not raw_path:
-            raise ValueError("请填写仓库目录。")
-        raw_candidate = Path(raw_path).expanduser()
-        if self.repository_root:
-            if raw_candidate.is_absolute() or ".." in raw_candidate.parts:
-                raise ValueError("只能填写当前用户仓库根目录下的相对路径。")
-            candidate = (self.repository_root / raw_candidate).resolve()
-            try:
-                candidate.relative_to(self.repository_root)
-            except ValueError as exc:
-                raise ValueError("仓库目录越出当前用户空间。") from exc
-        else:
-            candidate = raw_candidate.resolve()
-        if not candidate.is_dir():
-            raise ValueError("仓库目录不存在或不是文件夹：%s" % candidate)
-        inside = self._git(
-            ["rev-parse", "--is-inside-work-tree"], cwd=candidate, check=False
-        )
-        if inside.returncode == 0:
-            resolved = self._resolve_workspace(candidate)
-            head = self._git(
-                ["rev-parse", "--verify", "HEAD"], cwd=resolved, check=False
-            )
-            if head.returncode == 0 and head.stdout.strip():
-                return resolved, False
-            if not initialize:
-                raise RepositoryInitializationRequired(resolved, "no_commits")
-            self._create_initial_snapshot(resolved, initialize_git=False)
-            return resolved, True
-        if not initialize:
-            raise RepositoryInitializationRequired(candidate, "not_git")
-        self._create_initial_snapshot(candidate, initialize_git=True)
-        return self._resolve_workspace(candidate), True
-
     def _create_initial_snapshot(self, workspace, initialize_git):
         workspace = Path(workspace).resolve()
         try:
@@ -723,64 +665,26 @@ class FastLab:
                 % compact_error(exc, 500)
             ) from exc
 
-    def add_repository(self, alias, path, is_default=False, initialize=False):
-        alias = self._validate_repository_alias(alias)
-        with self.repository_lock:
-            if self.store.find_repository(alias):
-                raise ValueError("仓库别名已经存在。")
-            raw_path = str(path or "").strip()
-            if not raw_path:
-                raise ValueError("请填写仓库目录。")
-            candidate = (
-                (self.repository_root / raw_path).resolve()
-                if self.repository_root else Path(raw_path).expanduser().resolve()
-            )
-            if self.store.find_repository(str(candidate)):
-                raise ValueError("该仓库已经登记。")
-            resolved, initialized = self._repository_path_for_add(path, bool(initialize))
-            if self.store.find_repository(str(resolved)):
-                raise ValueError("该仓库已经登记。")
-            make_default = bool(is_default) or not self.store.list_repositories()
-            result = self.store.add_repository(alias, str(resolved), make_default)
-            if result["is_default"]:
-                self.default_repository_id = result["id"]
-                self.workspace = Path(result["path"])
-            return {**self._repository_status(result), "initialized": initialized}
-
     def initialize_repository(self, repository_id):
         with self.repository_lock:
             repository = self.store.get_repository(repository_id)
             if not repository:
                 raise KeyError("找不到仓库。")
-            resolved, initialized = self._repository_path_for_add(
-                repository["path"], initialize=True
-            )
-            if str(resolved) != repository["path"]:
-                repository = self.store.update_repository(
-                    repository_id, repository["alias"], str(resolved),
-                    repository["is_default"],
-                )
+            resolved = self._managed_repository_path(repository)
+            top = self._git(["rev-parse", "--show-toplevel"], cwd=resolved, check=False)
+            own_repository = top.returncode == 0 and Path(top.stdout.strip()).resolve() == resolved
+            head = self._git(["rev-parse", "--verify", "HEAD"], cwd=resolved, check=False)
+            initialized = not own_repository or head.returncode != 0
+            if initialized:
+                self._create_initial_snapshot(resolved, initialize_git=not own_repository)
             return {**self._repository_status(repository), "initialized": initialized}
 
-    def update_repository(self, repository_id, alias, path=None, is_default=False):
+    def update_repository(self, repository_id, alias, is_default=False):
         alias = self._validate_repository_alias(alias)
         current = self.store.get_repository(repository_id)
         if not current:
             raise KeyError("找不到仓库。")
-        if path is None or str(path).strip() == "":
-            resolved = self._resolve_workspace(current["path"])
-        elif self.repository_root:
-            raw = Path(str(path or ""))
-            if raw.is_absolute():
-                # The UI receives a relative display path, but tolerate the unchanged stored path.
-                candidate = raw.resolve()
-                if str(candidate) != current["path"]:
-                    raise ValueError("只能填写当前用户仓库根目录下的相对路径。")
-            else:
-                candidate = (self.repository_root / raw).resolve()
-            resolved = self._resolve_workspace(candidate)
-        else:
-            resolved = self._resolve_workspace(path)
+        resolved = self._resolve_workspace(current["path"])
         result = self.store.update_repository(
             repository_id, alias, str(resolved), bool(is_default) or current["is_default"]
         )
@@ -788,20 +692,6 @@ class FastLab:
             self.default_repository_id = result["id"]
             self.workspace = Path(result["path"])
         return self._repository_status(result)
-
-    def delete_repository(self, repository_id):
-        repository = self.store.get_repository(repository_id)
-        if not repository:
-            raise KeyError("找不到仓库。")
-        if self.repository_root:
-            raise ValueError("托管仓库只能永久删除，不能仅移除记录。")
-        self.store.delete_repository(repository_id)
-        self._sync_default_repository()
-        return {
-            "ok": True,
-            "repositoryId": self.default_repository_id,
-            "workspace": str(self.workspace) if self.workspace else None,
-        }
 
     def delete_managed_repository(self, repository_id):
         with self.repository_lock:
@@ -1057,7 +947,7 @@ class FastLab:
             },
         }
 
-    def create_task(self, title, goal, constraints_text, max_concurrency, workspace=None,
+    def create_task(self, title, goal, constraints_text, max_concurrency,
                     repository_id=None, working_subdir="", parent_task_id=None,
                     base_branch=None, base_commit=None):
         goal = str(goal or "").strip()
@@ -1072,7 +962,7 @@ class FastLab:
         if not 1 <= concurrency <= MAX_GLOBAL_CONCURRENCY:
             raise ValueError("任务并发必须在 1–%s 之间。" % MAX_GLOBAL_CONCURRENCY)
         display_title = str(title or "").strip() or goal.splitlines()[0][:80]
-        repository = self._resolve_repository(repository_id, workspace)
+        repository = self._resolve_repository(repository_id)
         task_workspace = Path(repository["path"])
         normalized_subdir = self._normalize_working_subdir(task_workspace, working_subdir)
         role_settings = self.role_settings(include_skill=True)
@@ -1102,12 +992,9 @@ class FastLab:
         self._spawn(self._plan_task, task_id, "")
         return self.task_payload(task_id)
 
-    def _resolve_repository(self, repository_id=None, workspace=None):
+    def _resolve_repository(self, repository_id=None):
         if repository_id:
             repository = self.store.get_repository(str(repository_id))
-        elif workspace:
-            resolved = str(self._resolve_workspace(workspace))
-            repository = self.store.find_repository(resolved)
         else:
             repository = self.store.get_repository(self.default_repository_id)
         if not repository:

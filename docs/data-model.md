@@ -26,8 +26,8 @@
 和 `0600`。不得把 runtime、仓库或 Worktree 共享给另一个租户。
 
 `local` 模式默认直接使用 `<data-dir>/fastlab.db`、`repositories/`、`tasks/` 和 `worktrees/`；
-仓库同样按 ID 托管。显式 `--workspace` 是旧路径兼容模式。旧的
-`.fastlab/fastlab.db` 不自动导入 `fastlab-v2.db`，也不会被本次重构覆盖。
+仓库同样按 ID 托管。旧本地数据库不会自动导入多用户注册数据库；外部路径记录不再可用，
+管理员需要另行迁移仓库，不能通过更改路径配置继续使用。数据库结构迁移仍在启动时执行。
 
 ## 全局注册数据库
 

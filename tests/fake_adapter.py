@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from agent_adapter import (
+from fastlab.agents import (
     AgentAdapter, PLAN_CAPABILITY, RESUME_CAPABILITY, SKILLS_CAPABILITY,
     VERIFY_CAPABILITY, WRITE_CAPABILITY,
 )

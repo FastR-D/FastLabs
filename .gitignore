@@ -10,3 +10,7 @@ node_modules/
 playwright-report/
 test-results/
 tips.md
+
+.ruff_cache/
+.pytest_cache/
+htmlcov/

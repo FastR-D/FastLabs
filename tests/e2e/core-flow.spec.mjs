@@ -103,6 +103,7 @@ test("loads the dashboard and submits the create-task workflow", async ({ page }
 
   await expect(page.getByRole("heading", { name: "E2E task" })).toBeVisible();
   await expect(page.getByText("Implement fixture")).toBeVisible();
+  await page.locator('[data-task-panel="subtask-subtask-1"] > summary').click();
   await expect(page.locator('[data-subtask-model="subtask-1"]')).toBeVisible();
   await expect(page.locator('[data-subtask-model="subtask-1"] option')).toHaveText([
     "CLI 默认模型",
@@ -144,4 +145,23 @@ test("uses the in-app categorized settings view and returns to its origin", asyn
   await expect(page.getByRole("button", { name: "永久删除仓库" })).toBeVisible();
   await page.getByRole("button", { name: "返回之前的页面" }).click();
   await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
+});
+
+
+test("creates and permanently deletes a managed repository against the real server", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".settings-button").click();
+  await page.getByRole("button", { name: /仓库管理/ }).click();
+  await expect(page.locator('input[name="path"]')).toHaveCount(0);
+  await page.locator('input[name="alias"]').fill("browser-repo");
+  await page.getByRole("button", { name: "创建仓库", exact: true }).click();
+  const row = page.locator(".repository-row").filter({ hasText: "browser-repo" });
+  await expect(row).toBeVisible();
+  const repositories = await (await page.request.get("/api/repositories")).json();
+  expect(repositories.management.mode).toBe("managed");
+  expect(repositories.repositories[0]).toMatchObject({ managed: true, has_commit: true });
+  page.once("dialog", (dialog) => dialog.accept());
+  await row.getByRole("button", { name: "永久删除仓库" }).click();
+  await expect(row).toHaveCount(0);
+  expect((await (await page.request.get("/api/repositories")).json()).repositories).toEqual([]);
 });

@@ -7,11 +7,9 @@ import sqlite3
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: F401
-from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from .config import DEFAULT_GLOBAL_CONCURRENCY, WEB_ROOT, compact_error
-from .errors import RepositoryInitializationRequired
 from .tenancy import FastLabService
 
 class FastLabHandler(BaseHTTPRequestHandler):
@@ -100,29 +98,24 @@ class FastLabHandler(BaseHTTPRequestHandler):
                 return
             body = self.read_json()
             if path == "/api/tasks":
+                if "workspace" in body:
+                    raise ValueError("不再接受 workspace 路径，请使用 repositoryId 选择托管仓库。")
                 task = self.app.create_task(
                     body.get("title"),
                     body.get("goal"),
                     body.get("constraints"),
                     body.get("maxConcurrency", DEFAULT_GLOBAL_CONCURRENCY),
-                    body.get("workspace"),
                     body.get("repositoryId"),
                     working_subdir=body.get("workingSubdir", ""),
                 )
                 return self.json_response(202, task)
             if path == "/api/repositories":
-                if self.app.repository_root:
-                    if "path" in body:
-                        raise ValueError("服务器模式不接受仓库路径，请创建仓库或填写 Git URL。")
-                    result = self.app.provision_repository(
-                        body.get("alias"), body.get("cloneUrl", ""),
-                        body.get("isDefault", False),
-                    )
-                else:
-                    result = self.app.add_repository(
-                        body.get("alias"), body.get("path"), body.get("isDefault", False),
-                        body.get("initialize", False),
-                    )
+                if "path" in body:
+                    raise ValueError("不接受仓库路径，请创建仓库或填写 Git URL。")
+                result = self.app.provision_repository(
+                    body.get("alias"), body.get("cloneUrl", ""),
+                    body.get("isDefault", False),
+                )
                 return self.json_response(201, result)
             match = re.fullmatch(r"/api/repositories/([a-f0-9]+)/initialize", path)
             if match:
@@ -171,21 +164,6 @@ class FastLabHandler(BaseHTTPRequestHandler):
                     result = self.app.message_subtask(subtask_id, body.get("message"))
                 return self.json_response(202, result)
             self.json_response(404, {"error": "接口不存在。"})
-        except RepositoryInitializationRequired as exc:
-            reported_path = exc.path
-            if getattr(self, "service", None) and self.app.repository_root:
-                try:
-                    reported_path = str(
-                        Path(exc.path).resolve().relative_to(self.app.repository_root)
-                    )
-                except (OSError, ValueError):
-                    reported_path = Path(exc.path).name
-            self.json_response(409, {
-                "error": str(exc),
-                "code": "repository_initialization_required",
-                "path": reported_path,
-                "reason": exc.reason,
-            })
         except (ValueError, json.JSONDecodeError, sqlite3.IntegrityError) as exc:
             self.json_response(400, {"error": compact_error(exc)})
         except KeyError as exc:
@@ -244,10 +222,10 @@ class FastLabHandler(BaseHTTPRequestHandler):
                 ))
             match = re.fullmatch(r"/api/repositories/([a-f0-9]+)", path)
             if match:
-                if self.app.repository_root and "path" in body:
-                    raise ValueError("服务器模式不能修改仓库路径。")
+                if "path" in body:
+                    raise ValueError("不能修改托管仓库路径。")
                 result = self.app.update_repository(
-                    match.group(1), body.get("alias"), body.get("path"),
+                    match.group(1), body.get("alias"),
                     body.get("isDefault", False),
                 )
                 return self.json_response(200, result)
@@ -279,9 +257,6 @@ class FastLabHandler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/tasks/([a-f0-9]+)", path)
             if match:
                 return self.json_response(200, self.app.delete_task(match.group(1)))
-            match = re.fullmatch(r"/api/repositories/([a-f0-9]+)", path)
-            if match:
-                return self.json_response(200, self.app.delete_repository(match.group(1)))
             match = re.fullmatch(r"/api/repositories/([a-f0-9]+)/managed", path)
             if match:
                 return self.json_response(

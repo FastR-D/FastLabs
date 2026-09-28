@@ -11,7 +11,7 @@ select = ["E9", "F401", "F63", "F7", "F82"]
 [tool.coverage.run]
 branch = true
 relative_files = true
-source = ["fastlab", "agent_adapter", "multitenancy", "server"]
+source = ["fastlab", "server"]
 
 [tool.coverage.report]
 show_missing = true

@@ -10,17 +10,13 @@ import threading
 from pathlib import Path
 
 from .application import FastLab
-from .config import APP_ROOT, load_local_env
+from .config import APP_ROOT, load_local_env, validate_execution_environment
 from .http_server import FastLabHandler, ThreadingHTTPServer
 from .tenancy import FastLabService
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description="FastLab multi-user Agent task console")
-    parser.add_argument(
-        "--workspace", default=None,
-        help="Legacy local-mode path inside an existing Git repository",
-    )
     parser.add_argument("--port", type=int, default=int(os.environ.get("FASTLAB_PORT", "4180")))
     parser.add_argument("--data-dir", default=str(APP_ROOT / ".fastlab"))
     parser.add_argument(
@@ -86,13 +82,6 @@ def _restore_signal_handlers(previous):
             pass
 
 
-def local_repository_root(data_dir, workspace=None):
-    """Use managed repositories for normal local runs; preserve explicit legacy workspaces."""
-    if str(workspace or "").strip():
-        return None
-    return Path(data_dir).expanduser().resolve() / "repositories"
-
-
 def main(argv=None):
     try:
         arguments, env_path, loaded_env = parse_arguments(argv)
@@ -103,18 +92,15 @@ def main(argv=None):
     if sys.version_info < (3, 10):
         raise SystemExit("FastLab 需要 Python 3.10 或更高版本。")
     try:
+        validate_execution_environment()
         auth_mode = str(os.environ.get("FASTLAB_AUTH_MODE") or "local").strip().lower()
         if auth_mode == "research":
             app = FastLabService(arguments.data_dir)
         elif auth_mode == "local":
             app = FastLab(
-                arguments.workspace,
-                arguments.data_dir,
-                arguments.codex_bin or os.environ.get("FASTLAB_CODEX_BIN"),
+                data_dir=arguments.data_dir,
+                codex_bin=arguments.codex_bin or os.environ.get("FASTLAB_CODEX_BIN"),
                 claude_bin=arguments.claude_bin or os.environ.get("FASTLAB_CLAUDE_BIN"),
-                repository_root=local_repository_root(
-                    arguments.data_dir, arguments.workspace
-                ),
             )
         else:
             raise ValueError("FASTLAB_AUTH_MODE 只能是 local 或 research。")
@@ -142,4 +128,4 @@ def main(argv=None):
         _restore_signal_handlers(previous_handlers)
 
 
-__all__ = ["build_parser", "local_repository_root", "main", "parse_arguments"]
+__all__ = ["build_parser", "main", "parse_arguments"]

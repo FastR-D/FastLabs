@@ -14,7 +14,6 @@ _EXPORTS = {
     "AgentRunCancelled": (".errors", "AgentRunCancelled"),
     "AgentRunTimeout": (".errors", "AgentRunTimeout"),
     "DeliveryReverificationRequired": (".errors", "DeliveryReverificationRequired"),
-    "RepositoryInitializationRequired": (".errors", "RepositoryInitializationRequired"),
 }
 
 __all__ = list(_EXPORTS)

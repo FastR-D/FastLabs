@@ -3,14 +3,11 @@
 ## 总体结构
 
 FastLab 是单进程、轻依赖的模块化单体。HTTP 控制面、SQLite、Git 编排和 Agent 调度在同一
-服务中运行，耗时 CLI 工作位于子进程。根目录的 `server.py`、`agent_adapter.py` 和
-`multitenancy.py` 是兼容入口；新增代码应放在 `fastlab/` 包内。
+服务中运行，耗时 CLI 工作位于子进程。根目录 `server.py` 仅负责启动；代码统一从 `fastlab/` 包导入。
 
 ```text
-兼容入口
-server.py ───────────────┐
-agent_adapter.py ────────┼──> fastlab/
-multitenancy.py ─────────┘
+启动入口
+server.py ──> fastlab/bootstrap.py
 
 fastlab/
 ├── config.py              配置解析、默认值、环境白名单
@@ -29,22 +26,21 @@ fastlab/
 ├── integrations/
 │   └── fastresearch.py    会话验证
 ├── runners/
-│   ├── process.py         默认直连 CLI 后端
-│   └── docker.py          可选容器后端
-├── application.py         FastLab 兼容门面与用例编排
+│   └── process.py         直连 CLI 后端
+├── application.py         FastLab 应用服务与用例编排
 ├── http_server.py         路由、认证、JSON 和静态资源
 └── bootstrap.py           CLI、启动检查、信号和优雅停机
 ```
 
 重构允许分阶段落地，但依赖方向必须保持：入口和 HTTP 依赖应用层，应用层组合领域服务，
-领域服务依赖 contracts/storage，不反向导入 HTTP 或兼容入口。Runner 不修改任务状态，
+领域服务依赖 contracts/storage，不反向导入 HTTP 或启动入口。Runner 不修改任务状态，
 Store 不启动线程，Git 服务不解析 HTTP。
 
-## 兼容门面
+## 应用接口
 
-`FastLab` 的构造参数和公开方法是现有测试、HTTP 层及外部脚本的兼容面。内部通过组合
-Store、DocumentProjector、GitService、Scheduler 和 VerificationService 实现，不要求调用
-方迁移。根目录三个 Python 模块继续 re-export 已有公共符号并保留 `python server.py`。
+`FastLab` 组合 Store、DocumentProjector、GitService、调度和验收服务。
+使用 `FastLab(data_dir=...)` 创建应用；仓库由 `provision_repository` 创建，任务按仓库 ID 选择。
+根目录不再导出公共符号，脚本必须从相应的 `fastlab.*` 模块导入。
 
 ## 任务数据流
 
@@ -150,9 +146,9 @@ Runner 是 CLI 与底层隔离技术之间的适配层。稳定能力包括：
 - 完成后幂等清理运行登记和临时资源。
 - 不解析 Agent 输出、不修改数据库、不决定任务状态。
 
-`ProcessCommandRunner` 是默认后端：独立 HOME、临时目录和 Provider runtime，白名单环境，
-独立进程组，CLI 严格沙箱。`DockerCommandRunner` 保留同一契约，适用于需要更强挂载边界的
-部署。管理员通过 `FASTLAB_EXECUTION_BACKEND` 选择，页面不能覆盖。
+`ProcessCommandRunner` 是唯一后端：独立 HOME、临时目录和 Provider runtime，白名单环境，
+独立进程组，CLI 严格沙箱。启动检查使用 `check_dependencies` 参数；生产默认开启。
+Runner 接口保留用于测试与后续扩展，当前不包含容器实现。
 
 认证来源属于用户设置而不是 Runner 类型。CLI 模式使用每用户独立的 Codex/Claude HOME；
 API Key 模式才注入对应 Provider Key。两种模式都必须经过相同 Runner 沙箱和路径校验。

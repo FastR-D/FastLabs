@@ -4,7 +4,6 @@
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--workspace PATH` | 空 | 旧 local 开发兼容入口；省略时使用 `<data-dir>/repositories/` 托管仓库 |
 | `--port PORT` | `FASTLAB_PORT` 或 `4180` | 回环监听端口 |
 | `--data-dir PATH` | 仓库 `.fastlab/` | 全局注册数据库和本地数据位置 |
 | `--env-file PATH` | `<data-dir>/fastlab.env` | 白名单环境文件；显式给出但不存在时启动失败 |
@@ -33,13 +32,8 @@
 
 | 变量 | 默认值 | 要求 |
 | --- | --- | --- |
-| `FASTLAB_EXECUTION_BACKEND` | `process` | `process` 或 `docker`；仅管理员可改，重启生效 |
 | `FASTLAB_CODEX_BIN` | `codex` | 固定版本 Codex CLI 的绝对路径或 PATH 命令 |
 | `FASTLAB_CLAUDE_BIN` | `claude` | 固定版本 Claude Code 的绝对路径或 PATH 命令 |
-| `FASTLAB_WORKER_IMAGE` | 空 | 仅 Docker 后端必填，使用不可变 tag/digest，禁止 `latest` |
-| `FASTLAB_CONTAINER_CPUS` | `2` | 仅 Docker 后端，每容器 CPU 限制 |
-| `FASTLAB_CONTAINER_MEMORY` | `4g` | 仅 Docker 后端，每容器内存限制 |
-| `FASTLAB_CONTAINER_PIDS` | `256` | 仅 Docker 后端，PID 限制 |
 
 `process` 后端在 Linux 必须通过 Runner 启动检查：`bubblewrap` 与 `socat` 存在，Codex/Claude
 严格沙箱参数可用。检查失败必须阻止生产启动，不能回退到无沙箱命令。
@@ -98,3 +92,9 @@ FASTLAB_CLAUDE_EXTRA_ALLOWED_TOOLS=["Bash(npm run *)","Bash(python -m unittest *
 从旧版本升级时必须从活动环境文件删除全部 `FEISHU_*` 键。飞书功能已移除，未知键导致启动
 失败是有意的安全行为；不要通过放宽白名单或忽略未知键恢复它们。若出于审计需要保留旧值，
 应移到受控密钥归档，而不是 FastLab 环境文件。
+
+## 已移除配置
+
+`--workspace`、`FASTLAB_EXECUTION_BACKEND`、`FASTLAB_WORKER_IMAGE` 和 `FASTLAB_CONTAINER_*`
+已移除。启动脚本、systemd 环境和环境文件必须删除这些设置；即使旧后端值为 `process`，
+也会明确报错。执行方式固定为 process。旧 Python 导入及 API 迁移见[API 变更](api.md#本次清理的接口变更)。

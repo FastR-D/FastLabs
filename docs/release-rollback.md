@@ -9,7 +9,7 @@
 
 ## 发布前检查
 
-1. 代码审查确认只改 FastLab，兼容入口存在，FastResearch/FastNews 无新增修改。
+1. 代码审查确认只改 FastLab，`server.py` 启动入口可用，FastResearch/FastNews 无新增修改。
 2. Python 3.10/3.13、Node 22、Ruff、coverage、HTTP、前端和 smoke 全部通过。
 3. Linux 严格沙箱 sentinel 测试通过且没有 skip。
 4. 记录应用 commit、Python lock/requirements、Codex/Claude 版本、OS 和配置摘要（不含密钥）。
@@ -34,7 +34,7 @@ systemd 可以把 WorkingDirectory/ExecStart 指向 `current`。发布包准备�
 ## 发布步骤
 
 1. 把新版本解压到全新的 release 目录，创建全新 venv 并安装依赖。
-2. 在旁路数据目录运行单元、前端和部署 smoke；验证 root 兼容入口。
+2. 在旁路数据目录运行单元、前端和部署 smoke；验证 `server.py` 启动及旧参数拒绝行为。
 3. 停止 FastLab，确认活动 CLI 已清理，创建发布前备份。
 4. 切换 `current` 和固定 CLI 路径，执行 `systemctl start fastlab`。
 5. 验证服务状态、两个健康端点、FastResearch 登录、仓库/任务读取和一项测试租户任务。

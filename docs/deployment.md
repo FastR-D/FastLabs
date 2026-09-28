@@ -1,7 +1,7 @@
 # 生产部署
 
 本指南针对单台 Linux 4U8G、同机 FastResearch、Nginx 同域 `/lab/`、systemd 单进程和默认
-`process` Runner。Docker 是可选后端，不是首版依赖。
+`process` Runner，这是当前唯一执行后端。
 
 ## 1. 创建专用账号和目录
 
@@ -65,7 +65,6 @@ sudo install -o root -g fastlab -m 0600 fastlab.env.example \
 
 ```ini
 FASTLAB_AUTH_MODE=research
-FASTLAB_EXECUTION_BACKEND=process
 FASTLAB_GLOBAL_CONCURRENCY=4
 FASTLAB_MAX_CONCURRENCY_PER_USER=1
 ```
@@ -111,25 +110,7 @@ FastLab 仍只监听 `127.0.0.1:4180`，TLS 由 Nginx 终止。
 2. 浏览器从 FastResearch 登录后可以访问 `/lab/`，跨 origin 写请求返回 403。
 3. Python 3.10/3.13、Node 22、Ruff、coverage、HTTP、前端和部署 smoke test 通过。
 4. Linux 实机沙箱测试无法读取另一租户 sentinel、服务环境文件和主密钥；任一读取成功都
-   阻止发布并切换 Docker/VM。
+   阻止发布，重新设计并验证更强的隔离方案。
 5. 以真实 Codex/Claude 并发 4 压测 30 分钟。内存超过 80%、swap 持续增长、OOM 或控制面
    明显阻塞时，把 `FASTLAB_GLOBAL_CONCURRENCY` 降为 `2` 后重新验证。
 6. 创建发布前一致性备份并验证可列出内容；确认 FastResearch/FastNews 无代码改动。
-
-## 可选 Docker 后端
-
-确需 Docker 时设置 `FASTLAB_EXECUTION_BACKEND=docker`，构建镜像必须显式传入两个固定版本：
-
-```bash
-docker build -f Dockerfile.worker \
-  --build-arg CODEX_VERSION=<approved-codex-version> \
-  --build-arg CLAUDE_CODE_VERSION=<approved-claude-version> \
-  -t fastlab-worker:<release-id> .
-```
-
-再把不可变 tag（最好 digest）写入 `FASTLAB_WORKER_IMAGE`。不要使用 Docker socket 挂载，也不要
-把 Docker 组权限作为默认直连部署的一部分。
-
-示例 systemd unit 的 `ExecStartPre` 专为默认 process 后端编写。切换 Docker 时应在单独评审的
-unit 中用镜像 inspect/daemon 检查替换 CLI/bubblewrap 探针并增加相应 unit 依赖；不要让一个
-环境变量悄悄改变 systemd 的宿主权限模型。

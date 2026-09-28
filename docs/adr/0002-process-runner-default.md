@@ -1,6 +1,6 @@
 # ADR-0002：可信内部部署默认使用直连 CLI Runner
 
-- 状态：已接受
+- 状态：部分被 [ADR-0004](0004-managed-repositories-process-only.md) 取代（2026-09-28）；下文保留历史决策
 - 日期：2026-09-25
 
 ## 背景

@@ -8,13 +8,11 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-import fastlab
 import server
 from cryptography.fernet import Fernet
-from fastlab.bootstrap import local_repository_root, parse_arguments
+from fastlab.bootstrap import parse_arguments
 from fastlab.config import TASK_STATES, validate_environment_key_contract
 from fastlab.documents import DocumentProjector
-from fastlab.errors import RepositoryInitializationRequired
 from fastlab.scheduling import AgentRunGate
 from fastlab.storage import Store
 from fastlab.runners import ProcessCommandRunner
@@ -23,11 +21,10 @@ from fastlab.tenant_registry import Principal
 
 
 class ModuleContractTests(unittest.TestCase):
-    def test_root_server_keeps_historical_public_symbols(self):
-        self.assertIs(server.FastLab, fastlab.FastLab)
-        self.assertIs(server.Store, Store)
-        self.assertIs(server.AgentRunGate, AgentRunGate)
-        self.assertIs(server.RepositoryInitializationRequired, RepositoryInitializationRequired)
+    def test_root_server_is_only_a_launcher(self):
+        self.assertTrue(callable(server.main))
+        self.assertFalse(hasattr(server, "FastLab"))
+        self.assertFalse(hasattr(server, "Store"))
 
     def test_environment_example_and_allowlist_are_identical(self):
         self.assertTrue(validate_environment_key_contract())
@@ -48,13 +45,25 @@ class ModuleContractTests(unittest.TestCase):
                 )
                 self.assertEqual(parsed.port, 49124)
 
-    def test_normal_local_start_uses_managed_repositories_and_workspace_is_legacy(self):
-        with tempfile.TemporaryDirectory(prefix="fastlab-local-repositories-") as folder:
-            root = Path(folder).resolve()
-            self.assertEqual(
-                local_repository_root(root), root / "repositories"
-            )
-            self.assertIsNone(local_repository_root(root, root / "existing-repo"))
+    def test_legacy_workspace_argument_is_rejected(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as error:
+            parse_arguments(["--workspace", "/tmp/old-project"])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_removed_execution_configuration_is_rejected(self):
+        from fastlab.config import REMOVED_EXECUTION_KEYS, load_local_env, validate_execution_environment
+        for key in REMOVED_EXECUTION_KEYS:
+            with self.subTest(key=key), patch.dict(os.environ, {key: "docker"}):
+                with self.assertRaisesRegex(ValueError, "已移除 Docker"):
+                    validate_execution_environment()
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "old.env"
+            config.write_text("FASTLAB_EXECUTION_BACKEND=docker\n")
+            config.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "不支持配置 FASTLAB_EXECUTION_BACKEND"):
+                load_local_env(config)
 
     def test_state_and_sqlite_schema_contract_remain_stable(self):
         self.assertEqual(TASK_STATES, {
@@ -103,18 +112,19 @@ class ModuleContractTests(unittest.TestCase):
                 "FASTLAB_PUBLIC_PATH": "/lab",
                 "FASTLAB_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode(),
                 "FASTLAB_TENANT_ROOT": str(root / "tenants"),
-                "FASTLAB_EXECUTION_BACKEND": "process",
                 "FASTLAB_GLOBAL_CONCURRENCY": "4",
                 "FASTLAB_MAX_CONCURRENCY_PER_USER": "1",
             }
             with patch.dict(os.environ, environment, clear=False):
-                service = FastLabService(root / "data", check_worker_image=False)
+                service = FastLabService(root / "data", check_dependencies=False)
                 try:
                     app = service.app_for(Principal("account-a", "Alice", "token"))
                     self.assertIsInstance(app.command_runner, ProcessCommandRunner)
                     self.assertEqual(app.agent_gate.limit, 1)
                     self.assertEqual(service.global_gate.limit, 4)
                     self.assertEqual(service.health_payload()["executionBackend"], "process")
+                    self.assertNotIn("docker", service.health_payload())
+                    self.assertNotIn("workerImage", service.health_payload())
                 finally:
                     service.shutdown()
 

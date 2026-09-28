@@ -11,14 +11,16 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from agent_adapter import (
+from fastlab.agents import (
     ClaudeCLIAdapter, ClaudePlanner, CodexCLIAdapter, CodexPlanner,
     PlannerError, parse_json_object, validate_json_schema,
 )
 from fake_adapter import FakeAgentAdapter
-from server import (
-    FastLab, FastLabHandler, RepositoryInitializationRequired, Store,
-    ThreadingHTTPServer, executable_command, load_local_env,
+from fastlab.application import FastLab
+from fastlab.http_server import FastLabHandler, ThreadingHTTPServer
+from fastlab.storage import Store
+from fastlab.config import (
+    executable_command, load_local_env,
     parse_agent_timeout, parse_claude_extra_allowed_tools, process_group_options,
     resolve_executable,
 )
@@ -56,7 +58,7 @@ def branch_exists(repo, branch):
 
 
 def initialize_repo(path, heading="Fixture"):
-    path.mkdir()
+    path.mkdir(parents=True)
     git(path, "init", "-b", "main")
     (path / "README.md").write_text("# %s\n" % heading, encoding="utf-8")
     git(path, "add", "README.md")
@@ -68,14 +70,23 @@ def initialize_repo(path, heading="Fixture"):
     return path
 
 
+def fixture_app(repo, data, **kwargs):
+    """Seed a managed repository record for tests using an existing Git fixture."""
+    app = FastLab(data_dir=data, repository_root=repo.parent if repo else None, **kwargs)
+    if repo is not None and not app.store.find_repository(str(repo.resolve())):
+        app.store.add_repository("fixture", str(repo.resolve()), True, repository_id=repo.name)
+        app._sync_default_repository()
+    return app
+
+
 class FastLabIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="fastlab-test-")
         self.root = Path(self.temp.name)
-        self.repo = initialize_repo(self.root / "repo")
+        self.repo = initialize_repo(self.root / "data" / "repositories" / ("a" * 32))
         self.data = self.root / "data"
         self.adapter = FakeAgentAdapter()
-        self.app = FastLab(
+        self.app = fixture_app(
             self.repo, self.data, agent_adapter=self.adapter, claude_bin=FAKE_CLAUDE,
             planner=cli_planner(self.adapter),
         )
@@ -136,7 +147,7 @@ class FastLabIntegrationTests(unittest.TestCase):
     def test_user_agent_defaults_and_custom_skill_are_snapshotted(self):
         self.app.shutdown()
         self.adapter = FakeAgentAdapter()
-        self.app = FastLab(
+        self.app = fixture_app(
             self.repo, self.data, agent_adapter=self.adapter,
             claude_bin=FAKE_CLAUDE, planner=None,
         )
@@ -326,10 +337,10 @@ class FastLabIntegrationTests(unittest.TestCase):
         )
 
     def test_repository_without_commits_has_clear_start_error(self):
-        unborn = self.root / "unborn"
+        unborn = self.app.repository_root / ("b" * 32)
         unborn.mkdir()
         git(unborn, "init", "-b", "main")
-        repository = self.app.store.add_repository("unborn", str(unborn.resolve()))
+        repository = self.app.store.add_repository("unborn", str(unborn.resolve()), repository_id=unborn.name)
         task = self.app.create_task(
             "Empty repository", "Create the first feature", "", 1,
             repository_id=repository["id"],
@@ -350,8 +361,14 @@ class FastLabIntegrationTests(unittest.TestCase):
         self.app.start_task(task["id"])
         self.wait_for_status(task["id"], "completed")
 
-    def test_non_git_repository_requires_confirmation_before_initial_snapshot(self):
-        project = self.root / "plain-folder"
+    def test_managed_repository_initial_snapshot_excludes_private_metadata(self):
+        git(self.root, "init", "-b", "main")
+        (self.root / "parent.txt").write_text("parent repository\n")
+        git(self.root, "add", "parent.txt")
+        git(self.root, "-c", "user.name=Test", "-c", "user.email=test@local",
+            "commit", "-m", "parent fixture")
+        parent_head = git(self.root, "rev-parse", "HEAD")
+        project = self.app.repository_root / ("c" * 32)
         project.mkdir()
         (project / "keep.txt").write_text("keep\n", encoding="utf-8")
         (project / "ignored.txt").write_text("ignore\n", encoding="utf-8")
@@ -360,12 +377,8 @@ class FastLabIntegrationTests(unittest.TestCase):
         metadata.mkdir()
         (metadata / "local.env").write_text("secret\n", encoding="utf-8")
 
-        with self.assertRaises(RepositoryInitializationRequired) as required:
-            self.app.add_repository("plain", str(project))
-        self.assertEqual(required.exception.reason, "not_git")
-        self.assertFalse((project / ".git").exists())
-
-        repository = self.app.add_repository("plain", str(project), initialize=True)
+        record = self.app.store.add_repository("plain", str(project), repository_id=project.name)
+        repository = self.app.initialize_repository(record["id"])
         self.assertTrue(repository["initialized"])
         self.assertTrue(repository["has_commit"])
         self.assertEqual(git(project, "log", "-1", "--format=%s"),
@@ -376,6 +389,7 @@ class FastLabIntegrationTests(unittest.TestCase):
         self.assertNotIn("ignored.txt", tracked)
         self.assertNotIn(".fastlab/local.env", tracked)
         self.assertEqual(git(project, "status", "--porcelain"), "")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), parent_head)
 
     def test_rerun_clear_logs_and_delete_task(self):
         task = self.prepare_task()
@@ -518,7 +532,7 @@ class FastLabIntegrationTests(unittest.TestCase):
         timeout_data = self.root / "timeout-data"
         worker = CodexCLIAdapter(str(FAKE_CODEX), timeout_data / "runtime")
         planner_adapter = FakeAgentAdapter()
-        self.app = FastLab(
+        self.app = fixture_app(
             self.repo,
             timeout_data,
             agent_adapter=worker,
@@ -681,7 +695,7 @@ class FastLabIntegrationTests(unittest.TestCase):
         self.app.shutdown()
         cli_data = self.root / "cli-data"
         cli_adapter = CodexCLIAdapter(str(FAKE_CODEX), cli_data / "runtime")
-        self.app = FastLab(
+        self.app = fixture_app(
             self.repo, cli_data, agent_adapter=cli_adapter, claude_bin=FAKE_CLAUDE,
             planner=cli_planner(cli_adapter, model="fake-model"),
         )
@@ -789,7 +803,7 @@ class FastLabIntegrationTests(unittest.TestCase):
         path.write_text("stale", encoding="utf-8")
         self.app.shutdown()
         restarted_adapter = FakeAgentAdapter()
-        self.app = FastLab(
+        self.app = fixture_app(
             None, self.data, agent_adapter=restarted_adapter, claude_bin=FAKE_CLAUDE,
             planner=cli_planner(restarted_adapter),
         )
@@ -898,7 +912,7 @@ class PlannerBackendTests(unittest.TestCase):
             repo = initialize_repo(root / "repo")
             data = root / "data"
             codex = FakeAgentAdapter()
-            app = FastLab(
+            app = fixture_app(
                 repo, data, agent_adapter=codex, claude_bin=FAKE_CLAUDE,
                 planner=None,
             )
@@ -941,7 +955,7 @@ class PlannerBackendTests(unittest.TestCase):
                 "FASTLAB_CODEX_BIN": str(root / "missing-codex"),
                 "FASTLAB_CLAUDE_BIN": str(root / "missing-claude"),
             }, clear=False):
-                app = FastLab(repo, root / "data")
+                app = fixture_app(repo, root / "data")
                 try:
                     self.assertTrue(app.health_payload()["ok"])
                     self.assertFalse(app.health_payload()["planner"]["available"])
@@ -955,7 +969,7 @@ class PlannerBackendTests(unittest.TestCase):
             repo = initialize_repo(root / "repo")
             with patch.dict(os.environ, {"FASTLAB_PLANNER_BACKEND": "not-a-backend"}, clear=False):
                 with self.assertRaisesRegex(ValueError, "codex 或 claude"):
-                    FastLab(repo, root / "data", codex_bin=FAKE_CODEX)
+                    fixture_app(repo, root / "data", codex_bin=FAKE_CODEX)
 
 
 class ValidationTests(unittest.TestCase):
@@ -1007,7 +1021,8 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(valid, 1)
 
     def test_web_poll_preserves_drafts_and_mobile_settings_is_reachable(self):
-        app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        app_js = "\n".join(path.read_text(encoding="utf-8")
+                           for path in sorted((ROOT / "web" / "modules").glob("*.js")))
         render_js = (ROOT / "web" / "modules" / "render.js").read_text(
             encoding="utf-8"
         )
@@ -1044,15 +1059,12 @@ class ValidationTests(unittest.TestCase):
         self.assertIn('data-action="delete-task"', app_js)
         self.assertIn('data-action="deliver"', app_js)
         self.assertIn('data-action="cleanup-git"', app_js)
-        self.assertIn("repository_initialization_required", app_js)
         self.assertIn('data-action="initialize-repository"', app_js)
         self.assertIn('data-action="clear-logs"', app_js)
         self.assertIn('data-task-panel="logs"', app_js)
         self.assertIn('data-task-panel="documents"', app_js)
         self.assertIn('data-action="settings"', index_html)
         self.assertIn(".mobile-settings-button", styles)
-        self.assertIn('name="plannerModel"', app_js)
-        self.assertIn('name="workerModel"', app_js)
         self.assertIn('id="skill-settings-form"', app_js)
         self.assertIn('<select name="${role}Model"', render_js)
         self.assertNotIn('<input name="${role}Model"', render_js)
@@ -1069,7 +1081,7 @@ class ValidationTests(unittest.TestCase):
         self.assertNotIn("一个计划", app_js)
         self.assertNotIn("LOCAL ORCHESTRATION", app_js)
         self.assertNotIn("LOCAL WORKSPACE", index_html)
-        self.assertIn('input name="path" required', app_js)
+        self.assertNotIn('name="path"', render_js)
         self.assertNotIn("非 Git 文件夹会先询问，再自动初始化", app_js)
         self.assertNotIn('data-action="login-device"', app_js)
         self.assertNotIn("openai-codex", (ROOT / "requirements.txt").read_text(encoding="utf-8"))

@@ -65,5 +65,5 @@ Bash(go test *)
    到无沙箱。
 4. **项目 MCP/hook 被拒绝**：这是生产安全策略，不应为单个任务临时开放。
 
-每次 Claude/OS 升级后重跑 Linux sentinel 门禁。任何跨租户或配置读取成功都要求切换
-Docker/VM。
+每次 Claude/OS 升级后重跑 Linux sentinel 门禁。任何跨租户或配置读取成功都必须阻止发布，
+修复并重新验证隔离边界；当前没有内置容器后端可供切换。

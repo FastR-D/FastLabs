@@ -338,7 +338,7 @@ class ProcessCommandRunner:
     def check(self):
         """Fail closed unless both CLI sandboxes are usable on Linux."""
         if not self.platform.startswith("linux"):
-            raise ValueError("Process 后端的多用户模式仅支持 Linux；其他系统请使用 Docker。")
+            raise ValueError("Process 后端的多用户模式仅支持 Linux；请在 Linux 主机部署多用户服务。")
         if not self.use_outer_sandbox:
             raise ValueError("Process 后端必须启用外层 bubblewrap 文件系统隔离。")
         missing = [name for name in ("bwrap", "socat") if not self._resolve_binary(name)]

@@ -2,7 +2,7 @@ export function createInitialState() {
   return {
     tasks: [],
     repositories: [],
-    repositoryManagement: { mode: "local_path", acceptsPath: true, acceptsCloneUrl: false },
+    repositoryManagement: { mode: "managed", acceptsPath: false, acceptsCloneUrl: true },
     settings: null,
     health: null,
     me: null,

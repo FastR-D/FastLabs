@@ -17,14 +17,7 @@ python server.py
 普通本机启动与多用户模式使用相同的托管仓库页面，仓库存放在
 `<data-dir>/repositories/<repository-id>/`。在网页创建空仓库或填写 HTTPS Git URL 即可。
 
-旧开发脚本可以显式用 `--workspace` 登记默认仓库。参数可以指向 Git 根目录或其任意子目录；
-此时进入兼容路径模式，不是新安装的推荐用法：
-
-```bash
-python server.py --workspace /path/inside/repository
-```
-
-不传 `--workspace` 时不会要求填写任何本机路径。
+仓库操作规则见[仓库与 Git](repositories-and-git.md)。
 
 ## 生产前置条件
 
@@ -36,8 +29,7 @@ Linux 生产主机还需要：
 - 同机 FastResearch 和 Nginx；
 - 仅 `fastlab` 用户可读的环境文件与数据目录。
 
-默认 `process` 后端不要求 Docker。若组织需要更强的租户边界，再安装 Docker 并显式设置
-`FASTLAB_EXECUTION_BACKEND=docker`。
+目前仅支持 process 执行方式，不提供 Docker 后端。安全适用范围见[安全边界](security.md)。
 
 生产配置：
 

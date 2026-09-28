@@ -49,17 +49,30 @@ LOCAL_ENV_KEYS = {
     "FASTLAB_PUBLIC_PATH",
     "FASTLAB_TENANT_ROOT",
     "FASTLAB_CREDENTIAL_MASTER_KEY",
-    "FASTLAB_EXECUTION_BACKEND",
-    "FASTLAB_WORKER_IMAGE",
     "FASTLAB_MAX_CONCURRENCY_PER_USER",
     "FASTLAB_GLOBAL_CONCURRENCY",
-    "FASTLAB_CONTAINER_CPUS",
-    "FASTLAB_CONTAINER_MEMORY",
-    "FASTLAB_CONTAINER_PIDS",
     "FASTLAB_PORT",
     "FASTLAB_CODEX_MODELS",
     "FASTLAB_CLAUDE_MODELS",
 }
+
+
+REMOVED_EXECUTION_KEYS = frozenset({
+    "FASTLAB_EXECUTION_BACKEND",
+    "FASTLAB_WORKER_IMAGE",
+    "FASTLAB_CONTAINER_CPUS",
+    "FASTLAB_CONTAINER_MEMORY",
+    "FASTLAB_CONTAINER_PIDS",
+})
+
+
+def validate_execution_environment():
+    obsolete = sorted(REMOVED_EXECUTION_KEYS.intersection(os.environ))
+    if obsolete:
+        raise ValueError(
+            "FastLab 仅支持 process 执行方式，已移除 Docker 和后端选择配置，请删除：%s。"
+            % ", ".join(obsolete)
+        )
 
 
 def documented_environment_keys(path=None):

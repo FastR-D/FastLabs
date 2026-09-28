@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_adapter import ClaudeCLIAdapter, CodexCLIAdapter
+from fastlab.agents import ClaudeCLIAdapter, CodexCLIAdapter
 from fastlab.contracts import ExecutionRunner
-from fastlab.runners import DockerCommandRunner, ProcessCommandRunner
+from fastlab.runners import ProcessCommandRunner
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,9 +60,8 @@ class ProcessCommandRunnerTests(unittest.TestCase):
             **options,
         )
 
-    def test_contract_and_compatibility_exports(self):
+    def test_process_runner_contract(self):
         self.assertTrue(isinstance(ProcessCommandRunner, type))
-        self.assertTrue(isinstance(DockerCommandRunner, type))
         with tempfile.TemporaryDirectory(prefix="fastlab-process-contract-") as folder:
             tenant, _ = self.make_space(folder)
             runner = self.make_runner(tenant)
