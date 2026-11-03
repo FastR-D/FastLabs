@@ -4,7 +4,10 @@ FastLab 是挂载在 FastResearch 下的多用户 Agent 任务台。它把需求
 Git Worktree、自动验收和安全交付组织成一条可追踪的流程。每个 FastResearch 账号拥有
 独立的数据、仓库登记、Worktree、CLI runtime 和加密模型凭证。
 
-每个用户可以在设置页选择 Planner、Worker 和 Verifier 的 Codex/Claude Agent 与模型，维护
+用户通过“Agent 库”创建、编辑、复制和归档能力定义，在任务中选择或调整执行者。
+定义按版本保存，任务保存快照；会话独立，运行历史可追溯。使用方式见 [Agent 与协作](docs/agents.md)。
+
+每个用户可以在设置页选择 Planner、Worker 和 Verifier 的 Codex/Claude 执行器与模型，维护
 自己的 orchestration Skill，并选择独立 CLI 登录或个人 API Key。未填写 API Key 时默认使用
 该用户空间中的 Codex CLI 登录。模型通过服务器允许列表生成的下拉框选择；选择“CLI 默认模型”
 时不显式传递模型名称。

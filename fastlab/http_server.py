@@ -69,6 +69,11 @@ class FastLabHandler(BaseHTTPRequestHandler):
                     "repositories": self.app.list_repositories(),
                     "management": self.app.repository_management(),
                 })
+            if path == '/api/agents':
+                return self.json_response(200, {'agents': self.app.agent_library.list()})
+            match = re.fullmatch(r'/api/agents/([a-f0-9]+)', path)
+            if match:
+                return self.json_response(200, self.app.agent_library.get(match.group(1)))
             if path == "/api/settings/executors":
                 return self.json_response(200, self.app.executor_settings())
             if path == "/api/settings/skill":
@@ -97,6 +102,12 @@ class FastLabHandler(BaseHTTPRequestHandler):
             if not self.prepare_tenant(path, unsafe=True):
                 return
             body = self.read_json()
+            if path == '/api/agents':
+                return self.json_response(201, self.app.agent_library.save(body))
+            match = re.fullmatch(r'/api/tasks/([a-f0-9]+)/agents', path)
+            if match:
+                return self.json_response(200, self.app.assign_agent(match.group(1), body.get('role'), body.get('agentId'), body.get('subtaskId'), body.get('temporaryAgent')))
+
             if path == "/api/tasks":
                 if "workspace" in body:
                     raise ValueError("不再接受 workspace 路径，请使用 repositoryId 选择托管仓库。")
@@ -107,6 +118,7 @@ class FastLabHandler(BaseHTTPRequestHandler):
                     body.get("maxConcurrency", DEFAULT_GLOBAL_CONCURRENCY),
                     body.get("repositoryId"),
                     working_subdir=body.get("workingSubdir", ""),
+                    agents=body.get("agents"),
                 )
                 return self.json_response(202, task)
             if path == "/api/repositories":
@@ -178,6 +190,10 @@ class FastLabHandler(BaseHTTPRequestHandler):
             if not self.prepare_tenant(path, unsafe=True):
                 return
             body = self.read_json()
+            match = re.fullmatch(r'/api/agents/([a-f0-9]+)', path)
+            if match:
+                return self.json_response(200, self.app.agent_library.save(body, match.group(1)))
+
             if path == "/api/settings/executors":
                 return self.json_response(200, self.app.update_executor_settings(body))
             if path == "/api/settings/skill":
@@ -249,6 +265,9 @@ class FastLabHandler(BaseHTTPRequestHandler):
                     self.principal.account_id, credential.group(1)
                 )
                 return self.json_response(200, {"ok": True})
+            match = re.fullmatch(r'/api/agents/([a-f0-9]+)', path)
+            if match:
+                return self.json_response(200, self.app.agent_library.archive(match.group(1)))
             if path == "/api/settings/skill":
                 return self.json_response(200, self.app.reset_skill_settings())
             match = re.fullmatch(r"/api/tasks/([a-f0-9]+)/events", path)

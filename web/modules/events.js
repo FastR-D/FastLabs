@@ -16,7 +16,7 @@ export function markDraft(event) {
 }
 
 function canLeaveSettingsDraft() {
-  return state.page !== "settings"
+  return !["settings", "agents"].includes(state.page)
     || !state.mainDirty
     || window.confirm("当前设置尚未保存，确定离开吗？");
 }
@@ -47,7 +47,25 @@ export function bindEvents(documentRef = document) {
     const form = event.target;
     const data = new FormData(form);
     try {
-      if (form.id === "task-form") {
+      if (form.id === "agent-library-form") {
+        const body = Object.fromEntries(data.entries());
+        body.roles = data.getAll("roles");
+        body.version = Number(form.dataset.version);
+        if (state.agentAssignment) {
+          const { taskId, ...assignment } = state.agentAssignment;
+          await api(`/api/tasks/${taskId}/agents`, { method: "POST", body: JSON.stringify({ ...assignment, temporaryAgent: body }) });
+          state.selectedTaskId = taskId;
+          state.page = "task";
+          state.agentAssignment = null;
+        } else {
+          await api(`/api/agents${form.dataset.id ? `/${form.dataset.id}` : ""}`, {
+            method: form.dataset.id ? "PUT" : "POST", body: JSON.stringify(body),
+          });
+        }
+        state.mainDirty = false;
+        state.agentDraft = null;
+        await refresh();
+      } else if (form.id === "task-form") {
         const task = await api("/api/tasks", { method: "POST", body: JSON.stringify({
           repositoryId: data.get("repositoryId"),
           workingSubdir: data.get("workingSubdir"),
@@ -55,6 +73,7 @@ export function bindEvents(documentRef = document) {
           goal: data.get("goal"),
           constraints: data.get("constraints"),
           maxConcurrency: Number(data.get("maxConcurrency")),
+          agents: Object.fromEntries(["planner", "worker", "verifier"].filter(r => data.get(`${r}Agent`)).map(r => [r, data.get(`${r}Agent`)])),
         }) });
         state.mainDirty = false;
         state.page = "task";
@@ -147,6 +166,60 @@ export function bindEvents(documentRef = document) {
     }
     const action = button.dataset.action;
     try {
+      if (["agent-library", "agent-new", "agent-edit", "agent-copy"].includes(action)) {
+        if (!canLeaveSettingsDraft()) return;
+        state.mainDirty = false;
+        state.page = "agents";
+        state.selectedTaskId = null;
+        state.agentDraft = null;
+        state.agentAssignment = null;
+        if (action === "agent-new") state.agentDraft = {};
+        if (["agent-edit", "agent-copy"].includes(action)) {
+          state.agentDraft = await api(`/api/agents/${button.dataset.agentId}`);
+          if (action === "agent-copy") {
+            state.agentDraft = { ...state.agentDraft, id: "", version: 0, name: `${state.agentDraft.name} 副本` };
+          }
+        }
+        return render();
+      }
+      if (action === "agent-archive") {
+        if (!window.confirm("归档此 Agent？已有任务会保留当时的定义。")) return;
+        await api(`/api/agents/${button.dataset.agentId}`, { method: "DELETE" });
+        return refresh();
+      }
+      if (action === "agent-assign") {
+        const id = button.dataset.subtaskId || "verifier";
+        const agentId = documentRef.querySelector(`[data-agent-choice="${CSS.escape(id)}"]`).value;
+        if (!agentId) throw new Error("请选择一个具体的 Agent 定义。");
+        await api(`/api/tasks/${state.selectedTaskId}/agents`, { method: "POST", body: JSON.stringify({
+          agentId, role: button.dataset.role, subtaskId: button.dataset.subtaskId || null,
+        }) });
+        state.mainDirty = false;
+        return refresh();
+      }
+      if (action === "agent-draft-cancel") {
+        if (!canLeaveSettingsDraft()) return;
+        if (state.agentAssignment) {
+          state.selectedTaskId = state.agentAssignment.taskId;
+          state.page = "task";
+        }
+        state.agentDraft = null;
+        state.agentAssignment = null;
+        return render();
+      }
+      if (["agent-save-snapshot", "agent-customize"].includes(action)) {
+        const task = await api(`/api/tasks/${state.selectedTaskId}`);
+        const definition = button.dataset.subtaskId
+          ? task.subtasks.find(s => s.id === button.dataset.subtaskId)?.executor_snapshot?.agent
+          : task.role_settings?.[button.dataset.role]?.agent;
+        state.agentAssignment = action === "agent-customize" ? {
+          taskId: task.id, role: button.dataset.role, subtaskId: button.dataset.subtaskId || null,
+        } : null;
+        state.agentDraft = { name: "任务内 Agent", executor: "codex", roles: [button.dataset.role], ...definition, id: "", version: 0 };
+        state.page = "agents";
+        state.selectedTaskId = null;
+        return render();
+      }
       if (action === "home") {
         if (!canLeaveSettingsDraft()) return;
         state.mainDirty = false;
@@ -164,6 +237,7 @@ export function bindEvents(documentRef = document) {
         return render();
       }
       if (action === "settings") {
+        if (!canLeaveSettingsDraft()) return;
         if (state.page !== "settings") {
           state.settingsOrigin = {
             page: state.page,

@@ -48,6 +48,7 @@ async function mockControlPlane(page) {
       contentType: "application/json; charset=utf-8",
       body: JSON.stringify(payload),
     });
+    if (path === "/api/agents") return json({ agents: [] });
     if (path === "/api/health") return json({ ok: true });
     if (path === "/api/me") return json({
       person: "E2E User",

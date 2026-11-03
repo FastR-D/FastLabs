@@ -109,3 +109,28 @@ Golden 测试和迁移说明。路由变更必须覆盖：成功、未认证、C
 - 外部目录登记和其初始化确认错误已移除；`initialize` 动作仅适用于现有托管仓库。
 - 多用户健康对象固定返回 `executionBackend: "process"`，不再返回 `docker`、`workerImage`。
 - 数据库结构迁移继续保留；本次接口删减不自动迁移外部仓库或清空其他部署的数据。
+
+## Agent 库与分配
+
+所有接口沿用现有租户认证和同源检查；ID 只在当前租户解析。
+
+| 方法与路径 | 输入 / 响应 |
+| --- | --- |
+| `GET /api/agents` | `{agents: [...]}`，仅返回未归档定义 |
+| `POST /api/agents` | 完整定义；返回 `201` 和 ID、version=1 |
+| `GET /api/agents/{id}` | 当前版本定义，包含归档状态 |
+| `PUT /api/agents/{id}` | 完整定义及读取时的 `version`；版本不符返回 400，成功生成新版本 |
+| `DELETE /api/agents/{id}` | 归档，返回 `{ok:true}`，不删除历史版本 |
+| `POST /api/tasks/{id}/agents` | 确认前分配；`role` 为 worker/verifier，worker 另需 `subtaskId`；`agentId` 或 `temporaryAgent` 二选一 |
+
+定义字段：`name`（必填，最多 80 字符）、`description`（2000）、`instructions`（20000）、
+`skills`（40000，纯文本）、`roles`（planner/worker/verifier 的非空数组）、
+`executor`（codex/claude）、`model`（空为默认）、`reasoningEffort`（默认 high）。
+不接收权限、CLI 路径或凭证字段。模型及执行能力通过原有管理员策略校验。
+复制/另存使用 POST 创建新 ID；任务内编辑通过 temporaryAgent 替换快照。
+
+`POST /api/tasks` 增加可选 `agents: {planner?: id, worker?: id, verifier?: id}`。
+Planner 子任务增加可选 `agentId`、`temporaryAgent`，不得同时使用；无新字段的旧计划仍受支持。
+真实 Codex 输出使用严格 Schema 的 nullable 字段，输入验证继续接受旧计划省略字段。
+`GET /api/tasks/{id}` 增加 `runs` 调用历史；角色和子任务配置增加 `agent` 定义快照。
+原有执行器/模型覆盖接口保留，实际调用配置与定义来源分别记录。

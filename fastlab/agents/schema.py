@@ -112,3 +112,24 @@ def validate_json_schema(value, schema, path="$", root_schema=None):
 
 
 __all__ = ["parse_json_object", "validate_json_schema"]
+
+
+def strict_output_schema(schema):
+    """Require nullable optional properties on the wire, retaining legacy input validation."""
+    import copy
+    result = copy.deepcopy(schema)
+    def visit(node):
+        if not isinstance(node, dict):
+            return
+        properties = node.get('properties')
+        if properties is not None:
+            original_required = set(node.get('required', []))
+            node['required'] = list(properties)
+            for key, value in properties.items():
+                if key not in original_required and 'type' in value:
+                    types = value['type'] if isinstance(value['type'], list) else [value['type']]
+                    value['type'] = list(dict.fromkeys([*types, 'null']))
+                visit(value)
+        visit(node.get('items'))
+    visit(result)
+    return result

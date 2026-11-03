@@ -92,3 +92,23 @@
   主 `.db` 可能丢失已提交 WAL 数据。
 - 恢复时必须同时恢复匹配的 `FASTLAB_CREDENTIAL_MASTER_KEY`，否则凭证不可解密。
 - 数据库和文档不是 Git 仓库内容，不应提交到业务仓库。
+
+## Agent 库增量迁移（schema 1）
+
+租户 `settings` 的 `agent.library.schema=1` 与全局租户注册库 schema 分开。
+首次增加 Agent 表前通过 SQLite backup API 创建 `fastlab.db.before-agent-library.db`（0600）；
+不覆盖已有备份，不改写旧任务。未知 Agent schema 拒绝启动。
+
+- `agent_definitions`：稳定 ID、当前版本、归档标记和时间。
+- `agent_versions`：以 `(agent_id, version)` 为主键，保存不可变定义 JSON。
+- `agent_runs`：独立运行 ID、任务 ID、实例 ID、运行键、角色、实际执行器、配置快照、
+  会话 ID、状态、起止时间、退出码和错误。按插入顺序读取，避免同秒调用乱序。
+- `agent.library.defaults`：三个初始化定义的 ID。初始化与标记在同一事务中完成。
+
+角色定义保存在 `role_settings_json` 的 `agent` 字段，可选目录保存在 `agentCatalog`；
+子任务定义保存在 `executor_snapshot_json.agent`。已有任务无新字段时按旧配置运行。
+目录不进入公开任务载荷；当前任务实际选中的定义和运行快照对所属用户可读。
+定义不含 CLI 登录数据、API Key 或沙箱权限。删除任务级联清理调用记录，归档定义不删除版本。
+
+发布前仍应备份全部数据和主密钥。自动备份只覆盖单个租户数据库，不替代完整部署备份；
+回滚时停止服务并恢复发布前完整备份，不能只删除 Agent 表后继续运行。

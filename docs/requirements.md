@@ -6,8 +6,8 @@ FastLab 为 FastResearch 的可信内部成员提供一个可审计的 Agent 任
 检查 Planner 生成的计划，再由 Codex 或 Claude 在隔离 Worktree 中执行；FastLab 负责依赖、
 并发、Git 合并、验收和最终交付。
 
-本阶段在继续模块化和服务器安全收尾的同时，新增每用户 Agent/模型默认值、可编辑的任务分发
-Skill、CLI/API Key 认证来源选择和用户工作空间语义。不修改 FastResearch 或 FastNews，也不
+本阶段增加租户独立的 Agent 定义库、版本快照、任务内临时定义和调用历史；
+沿用任务分发 Skill、CLI/API Key 认证和托管工作空间。不修改 FastResearch 或 FastNews，也不
 恢复已移除的飞书功能。实现进度和发布验证状态以根目录 `plan.md` 为准。
 
 ## 角色
@@ -57,7 +57,7 @@ Skill、CLI/API Key 认证来源选择和用户工作空间语义。不修改 Fa
   切换 Agent 必须刷新选项，历史任务中的旧模型可以只读兼容，但不能任意提交新模型名。
 - 取消、超时和服务停机必须终止对应完整进程树，晚到的旧 Dispatch 不能覆盖当前状态。
 - 目标目录有未提交改动、分支改变、历史改写、同步冲突或验收失败时，不得覆盖用户文件。
-- SQLite 文件名、表结构和租户目录布局保持兼容，本次重构不要求数据迁移。
+- SQLite 文件名和租户布局保持兼容；Agent 库采用新增表与版本标记的增量迁移，先备份再升级。
 - `/api/health` 可匿名访问；其他页面/API 在 `research` 模式下必须通过 FastResearch 会话。
 - 不恢复飞书入口，不修改 FastResearch 和 FastNews 源码。
 
@@ -91,3 +91,11 @@ Skill、CLI/API Key 认证来源选择和用户工作空间语义。不修改 Fa
 - 真实 Codex/Claude 并发 4 压测 30 分钟；若内存超过 80%、swap 持续增长、发生 OOM 或页面
   明显阻塞，部署配置降为全局并发 2。
 - `git diff` 确认 FastResearch、FastNews 没有新增修改。
+
+## 可复用 Agent
+
+Agent 指能力定义；Codex/Claude 指执行器；规划/执行/验收指角色。
+用户可以创建、修改、复制、归档定义，定义的指令和 Skills 随版本保存。
+任务创建时固定角色定义和可用目录，Planner 可引用已有定义或生成任务内临时定义。
+确认前允许重新分配或编辑临时定义，用户可另存入库；确认后由平台统一调度。
+任务不自动继承后续定义变更，不自动沉淀跨任务记忆。操作细节见 [Agent 与协作](agents.md)。

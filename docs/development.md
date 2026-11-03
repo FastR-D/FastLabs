@@ -114,3 +114,12 @@ git diff --check
 ```
 
 再确认变更只位于 FastLab，且没有提交 `.fastlab/`、API Key、环境文件、数据库或任务 Worktree。
+
+## Agent 功能验证
+
+`tests/test_agent_library.py` 覆盖版本冲突、归档、任务快照、创建时目录、临时定义、
+迁移、跨租户 ID、独立会话、续接、调用异常和 API；前端用例覆盖安全渲染与角色筛选。
+`tests/e2e/agent-library.spec.mjs` 使用真实 HTTP 和测试 CLI 完成创建、编辑、复制、
+任务内修改、执行和归档，并检查窄屏和未保存内容保护。
+`deploy/e2e_server.py` 强制使用仓库内的假 Codex/Claude，避免测试调用开发者真实账号。
+实际 CLI 与 Linux 隔离仍须按发布门禁单独验证。

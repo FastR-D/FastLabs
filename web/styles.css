@@ -397,3 +397,9 @@ details.panel > h4 { margin: 20px 24px 8px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+.agent-library-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 18px; }
+.agent-library-grid .settings-body { padding: 22px; }
+.agent-assignment { padding: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.agent-assignment select { max-width: 100%; }
+.run-history-row { border-bottom: 1px solid var(--border, #ddd); padding: 12px 0; overflow-wrap: anywhere; }

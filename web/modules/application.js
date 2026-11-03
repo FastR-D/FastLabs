@@ -4,12 +4,13 @@ import { escapeHtml } from "./presentation.js";
 import { state } from "./state.js";
 
 export async function refresh({ keepPage = true, renderMain = true, respectEditing = false } = {}) {
-  const [tasks, repositoryPayload, settings, health, me] = await Promise.all([
+  const [tasks, repositoryPayload, settings, health, me, library] = await Promise.all([
     api("/api/tasks"),
     api("/api/repositories"),
     api("/api/settings/executors"),
     api("/api/health"),
     api("/api/me"),
+    api("/api/agents"),
   ]);
   state.tasks = tasks.tasks;
   state.repositories = repositoryPayload.repositories;
@@ -19,6 +20,7 @@ export async function refresh({ keepPage = true, renderMain = true, respectEditi
   state.settings = settings;
   state.health = health;
   state.me = me;
+  state.agents = library.agents || [];
   if (!keepPage) {
     state.page = "home";
     state.selectedTaskId = null;

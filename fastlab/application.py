@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlsplit
 
+from .agent_library import AgentLibrary
 from .agents import (
     AgentAdapter,
     ClaudeCLIAdapter,
@@ -136,6 +137,8 @@ class FastLab:
         self.verification = VerificationService(self)
         self.user_skill_path = self.data_dir / "skills" / "orchestration" / "SKILL.md"
         self._ensure_user_skill()
+        self.agent_library = AgentLibrary(self.store, self._validate_role_preference)
+        self.agent_library.seed(self.agent_preferences())
         self._rebuild_documents()
 
     def _planner_from_environment(self):
@@ -443,6 +446,10 @@ class FastLab:
                 role, payload.get(role, current[role])
             )
         self.store.set_setting("agent.preferences", updated)
+        for role, agent_id in self.store.get_setting('agent.library.defaults', {}).items():
+            definition = self.agent_library.get(agent_id)
+            if not definition['archived']:
+                self.agent_library.save({**definition, **updated[role]}, agent_id)
         return self.executor_settings()
 
     def role_settings(self, include_skill=False):
@@ -949,7 +956,7 @@ class FastLab:
 
     def create_task(self, title, goal, constraints_text, max_concurrency,
                     repository_id=None, working_subdir="", parent_task_id=None,
-                    base_branch=None, base_commit=None):
+                    base_branch=None, base_commit=None, agents=None):
         goal = str(goal or "").strip()
         if not goal:
             raise ValueError("请填写任务目标。")
@@ -966,6 +973,27 @@ class FastLab:
         task_workspace = Path(repository["path"])
         normalized_subdir = self._normalize_working_subdir(task_workspace, working_subdir)
         role_settings = self.role_settings(include_skill=True)
+        selections = agents if agents is not None else {}
+        if not isinstance(selections, dict) or set(selections) - {'planner', 'worker', 'verifier'}:
+            raise ValueError('Agent 选择无效。')
+        defaults = self.store.get_setting('agent.library.defaults', {})
+        for role in ('planner', 'worker', 'verifier'):
+            selected = selections.get(role, defaults.get(role))
+            if selected:
+                # An archived default falls back to legacy settings; explicit selections fail.
+                try:
+                    definition = self.agent_library.get(selected, active=True)
+                except KeyError:
+                    if role in selections:
+                        raise
+                    continue
+                if role not in definition['roles']:
+                    raise ValueError('Agent 不适用于所选角色。')
+                role_settings[role].update({k: definition[k] for k in ('executor', 'model', 'reasoningEffort')})
+                role_settings[role]['agent'] = definition
+                if role == 'planner':
+                    role_settings[role]['backend'] = definition['executor']
+        role_settings['agentCatalog'] = self.agent_library.list()
         planner_instance = self._planner_for_role(
             role_settings["planner"], role_settings["skill"]["content"]
         )
@@ -1162,6 +1190,9 @@ class FastLab:
             item["id"] for item in self.list_executors() if item["available"]
         }
         prompt = self.planner_prompt(task, feedback, available_executors)
+        catalog = [item for item in roles.get('agentCatalog', [])
+                   if item['executor'] in available_executors and 'worker' in item['roles']]
+        prompt += "\n可选 Agent 定义（使用 agentId 引用）：\n" + json.dumps(catalog, ensure_ascii=False)
         session = {"id": None}
 
         def event(kind, message, payload):
@@ -1194,6 +1225,7 @@ class FastLab:
                     task_id, "cancelled", "task.cancelled", "任务已取消。"
                 )
                 return
+            plan = self.agent_library.resolve_plan(plan, catalog, worker_setting.get('agent', {}))
             plan = self.validate_plan(plan, available_executors=available_executors)
             with self._task_lock(task_id):
                 self.store.replace_subtasks(task_id, plan["subtasks"])
@@ -1202,14 +1234,20 @@ class FastLab:
                         value["executor"] for value in plan["subtasks"]
                         if value["key"] == item["plan_key"]
                     )
+                    planned = next(value for value in plan['subtasks'] if value['key'] == item['plan_key'])
+                    definition = planned.get('agentSnapshot') or {}
                     self._assign_subtask_executor(
                         item,
                         executor,
-                        worker_setting.get("model")
-                        if executor == worker_setting.get("executor") else None,
-                        worker_setting.get("reasoningEffort")
-                        if executor == worker_setting.get("executor") else None,
+                        definition.get("model") if definition else (worker_setting.get("model")
+                        if executor == worker_setting.get("executor") else None),
+                        definition.get("reasoningEffort") if definition else (worker_setting.get("reasoningEffort")
+                        if executor == worker_setting.get("executor") else None),
                     )
+                    if definition:
+                        current = self.require_subtask(item['id'])[1]
+                        snapshot = {**current['executor_snapshot'], 'agent': definition}
+                        self.store.update_subtask(item['id'], executor_snapshot_json=json.dumps(snapshot, ensure_ascii=False))
                 values = {
                     "plan_json": json.dumps(plan, ensure_ascii=False),
                     "error": None,
@@ -2238,6 +2276,9 @@ class FastLab:
         if selected_effort not in EFFORTS:
             raise ValueError("推理等级无效。")
         snapshot = self._executor_snapshot(executor, selected_model or None, selected_effort)
+        definition = (subtask.get('executor_snapshot') or {}).get('agent')
+        if definition:
+            snapshot['agent'] = definition
         self.store.update_subtask(
             subtask["id"],
             executor=executor,
@@ -2246,6 +2287,41 @@ class FastLab:
             reasoning_effort=selected_effort,
         )
         return executor, snapshot
+
+    def assign_agent(self, task_id, role, agent_id=None, subtask_id=None, temporary=None):
+        with self._task_lock(task_id):
+            task = self.require_task(task_id)
+            if task['status'] != 'awaiting_approval':
+                raise ValueError('只能在确认执行前分配 Agent。')
+            if role not in ('worker', 'verifier'):
+                raise ValueError('不能修改当前任务的规划 Agent。')
+            if bool(agent_id) == bool(temporary):
+                raise ValueError('请选择已有 Agent 或提供临时定义。')
+            if temporary is not None and not isinstance(temporary, dict):
+                raise ValueError('临时 Agent 必须是定义对象。')
+            definition = (self.agent_library.snapshot(agent_id, role) if agent_id else
+                          self.agent_library.normalize({**temporary, 'roles': [role]}))
+            if role == 'worker':
+                subtask = next((item for item in task['subtasks'] if item['id'] == subtask_id), None)
+                if not subtask or subtask['attempt']:
+                    raise ValueError('子任务不存在或已执行。')
+                self._assign_subtask_executor(subtask, definition['executor'], definition['model'], definition['reasoningEffort'])
+                current = self.require_subtask(subtask_id)[1]
+                snapshot = {**current['executor_snapshot'], 'agent': definition}
+                self.store.update_subtask(subtask_id, executor_snapshot_json=json.dumps(snapshot, ensure_ascii=False))
+                plan = task.get('plan') or {}
+                for item in plan.get('subtasks', []):
+                    if item['key'] == subtask['plan_key']:
+                        item.update(agentSnapshot=definition, executor=definition['executor'], agentId=definition.get('id'))
+                        item.pop('temporaryAgent', None)
+                self.store.update_task(task_id, plan_json=json.dumps(plan, ensure_ascii=False))
+            else:
+                roles = task['role_settings']
+                roles['verifier'] = {**definition, 'agent': definition}
+                self.store.update_task(task_id, role_settings_json=json.dumps(roles, ensure_ascii=False))
+            self.store.add_event(task_id, 'agent.assigned', '已更新 Agent 分配。', subtask_id=subtask_id)
+            self._write_docs_unlocked(task_id)
+        return self.task_payload(task_id)
 
     def update_subtask_executor(self, subtask_id, executor, model=None, effort=None):
         task, subtask = self.require_subtask(subtask_id)
@@ -2345,6 +2421,8 @@ class FastLab:
         with self._task_lock(task_id):
             current = self.require_task(task_id)
             roles = dict(current.get("role_settings") or {})
+            if roles.get('verifier', {}).get('agent'):
+                verifier['agent'] = roles['verifier']['agent']
             roles["verifier"] = verifier
             self.store.update_task(
                 task_id, role_settings_json=json.dumps(roles, ensure_ascii=False)
@@ -2438,6 +2516,7 @@ class FastLab:
                 path = folder / name
                 docs[name] = path.read_text(encoding="utf-8") if path.exists() else ""
             task["documents"] = docs
+            task["runs"] = self.agent_library.runs(task_id)
             return self._public_task(task)
 
     def list_payload(self):
@@ -2450,7 +2529,7 @@ class FastLab:
                 key: value for key, value in setting.items()
                 if key in {
                     "executor", "name", "model", "reasoningEffort", "backend",
-                    "kind", "source", "readOnly",
+                    "kind", "source", "readOnly", "agent",
                 }
             }
             for role, setting in (task.get("role_settings") or {}).items()
@@ -2461,7 +2540,7 @@ class FastLab:
             item["executor"] = item.get("executor") or snapshot.get("executor")
             item["executor_snapshot"] = {
                 key: value for key, value in snapshot.items()
-                if key in {"executor", "name", "model", "reasoningEffort"}
+                if key in {"executor", "name", "model", "reasoningEffort", "agent"}
             }
             # Never expose columns left behind by a database created by an older build.
             item.pop("agent_profile_id", None)

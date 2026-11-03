@@ -26,7 +26,7 @@ class PlanningService:
         ) or "- 无可用 Worker；请明确报告无法生成可执行计划。"
         return """你是 FastLab 的只读任务规划器。必须遵守已注入的 orchestration Skill。
 
-把目标拆成可以在独立 Git worktree 中完成的任务 DAG。使用 S1、S2… 作为 key，dependencies 只表达真实依赖，weight 取 1 到 5。每个子任务必须从可用执行器中选择 executor；不要创建或命名任何其他 Agent。title 是折叠时显示的简洁摘要（最多 80 个字符）；instructions 写清具体产出、范围、限制和检查方法，但不要重复整段顶层目标。验收标准必须可验证、可给出证据，优先设计无需 GUI 或公网的自动检查。严格输出符合给定 JSON Schema 的单个 JSON 对象。
+把目标拆成可以在独立 Git worktree 中完成的任务 DAG。使用 S1、S2… 作为 key，dependencies 只表达真实依赖，weight 取 1 到 5。每个子任务必须从可用执行器中选择 executor；可以用 agentId 选择提供的 Agent，或用 temporaryAgent 创建任务内临时能力定义；两者不可同时使用。简单目标只需一个执行者，不能修改权限或递归派发。title 是折叠时显示的简洁摘要（最多 80 个字符）；instructions 写清具体产出、范围、限制和检查方法，但不要重复整段顶层目标。验收标准必须可验证、可给出证据，优先设计无需 GUI 或公网的自动检查。严格输出符合给定 JSON Schema 的单个 JSON 对象。
 
 目标仓库：{workspace}
 主要工作目录：{working_subdir}

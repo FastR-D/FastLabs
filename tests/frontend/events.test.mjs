@@ -77,6 +77,7 @@ test("sidebar menu actions target their own task without leaving the selected ta
   };
   const payloads = {
     "/api/tasks": { tasks: [selectedTask] },
+    "/api/agents": { agents: [] },
     "/api/repositories": { repositories: [] },
     "/api/settings/executors": { executors: [], runs: {} },
     "/api/health": { ok: true },

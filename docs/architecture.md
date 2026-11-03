@@ -16,6 +16,7 @@ fastlab/
 ├── storage.py             SQLite Store 与序列化
 ├── documents.py           task/progress/acceptance 文档投影
 ├── git_service.py         非交互 Git 命令边界；应用层编排 Worktree/交付
+├── agent_library.py      租户 Agent 定义、版本、快照解析和调用历史
 ├── agents/                Codex、Claude、Planner、Schema
 ├── runtime.py             单次 Agent 生命周期和日志
 ├── planning.py            计划生成、校验与用户编辑
@@ -170,3 +171,20 @@ API Key 模式才注入对应 Provider Key。两种模式都必须经过相同 R
 
 新增 Runner、路由、状态或配置前阅读[开发指南](development.md)。所有扩展必须保持兼容
 入口、明确所有权、失败关闭，并为外部行为增加契约测试。
+
+## Agent 定义与执行关联
+
+AgentLibrary 负责定义校验、版本存储、归档、计划引用解析和运行记录；不启动 CLI。
+应用层负责选择定义、保存任务快照及确认前分配，Runtime 负责将快照内容注入调用。
+
+```text
+Agent 定义 vN → 任务角色 / 子任务配置快照 → 执行实例
+                                             ├─ 单次运行 → 新 CLI 会话
+                                             └─ 后续运行 → 显式续接原会话
+```
+
+每次规划、执行、验收调用都先建立 queued 记录，获取现有并发槽位后进入 running；
+完成写入 succeeded/failed/cancelled/timed_out，重启遗留调用标记 interrupted。
+实例 ID 使用子任务 ID 或 task-id:planner/verifier；运行 ID 独立生成，不覆盖历史尝试。
+CLI 会话 ID 是 Provider 标识，不作为任务或 Agent 定义 ID。日志事件关联对应运行 ID。
+历史任务没有定义快照时继续使用原角色与执行器配置，不回填或伪造历史调用。

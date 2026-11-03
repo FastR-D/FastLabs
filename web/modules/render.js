@@ -1,3 +1,4 @@
+import { agentOptions, libraryView, assignment, runHistory } from "./agent-library.js";
 import { api } from "./api.js";
 import {
   escapeHtml,
@@ -176,7 +177,7 @@ function renderCreate() {
       <div class="field full"><label>目标</label><textarea name="goal" rows="7" required placeholder="要完成什么？"></textarea></div>
       <div class="field full"><label>限制 <span class="field-hint">可选</span></label><textarea name="constraints" rows="3" placeholder="不能修改什么？"></textarea></div>
       <div class="field"><label>并发数</label><input name="maxConcurrency" type="number" min="1" max="${state.settings?.globalConcurrency || 4}" value="${Math.min(4, state.settings?.globalConcurrency || 4)}" required></div>
-      <div class="field"><label>规划工具</label><input value="${plannerLabel(planner)}" readonly></div>
+      ${[["planner", "规划 Agent"], ["worker", "默认执行 Agent"], ["verifier", "验收 Agent"]].map(([r, n]) => `<div class="field"><label>${n}</label><select name="${r}Agent">${agentOptions(r)}</select></div>`).join("")}
       <div class="form-actions full"><button class="primary-button" type="submit">生成计划</button></div>
     </form>`;
 }
@@ -197,6 +198,7 @@ function subtaskCard(task, item) {
   return `<details class="subtask-card" data-task-panel="subtask-${escapeHtml(item.id)}" ${taskPanelOpen(task.id, `subtask-${item.id}`)}>
     <summary class="subtask-heading"><span class="subtask-key">${item.plan_key}</span><h4>${escapeHtml(item.title)}</h4><span class="status-pill ${item.status}">${escapeHtml(statusLabels[item.status] || item.status)}</span></summary>
     <div class="subtask-body">
+      ${assignment(task, "worker", item)}
       ${editable ? `<section class="subtask-action-panel plan-editor">
         <header class="subtask-action-heading"><div><strong>执行前编辑</strong><span>保存不会启动任务</span></div><span class="edit-badge">可编辑</span></header>
         <label class="subtask-field">简介<input data-subtask-title="${escapeHtml(item.id)}" maxlength="80" value="${escapeHtml(item.title)}"></label>
@@ -267,6 +269,8 @@ function renderTask(task) {
     </section>
     ${task.error ? `<div class="alert error">${escapeHtml(task.error)}</div>` : ""}
     ${task.parent_task_id ? `<div class="alert">继续自任务 <code>${escapeHtml(task.parent_task_id.slice(0, 8).toUpperCase())}</code></div>` : ""}
+    ${assignment(task, "verifier")}
+    ${runHistory(task.runs || [])}
     <section class="panel task-operation-note"><p>规划阶段可以直接编辑子任务。重试、修改和追加都只会在点击对应确认按钮后运行。</p></section>
     <section class="panel">
       <header class="panel-header"><h3>子任务</h3></header>
@@ -389,6 +393,7 @@ export async function render() {
   rememberTaskView();
   state.mainDirty = false;
   renderSidebar();
+  if (state.page === "agents") { leaveTaskView(); main.innerHTML = libraryView(); return; }
   if (state.page === "new") return renderCreate();
   if (state.page === "settings") return renderSettings();
   if (state.selectedTaskId) {

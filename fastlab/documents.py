@@ -43,6 +43,10 @@ class DocumentProjector:
                     item.get("reasoning_effort") or "默认", item["instructions"],
                 )
             )
+            definition = snapshot.get('agent')
+            if definition:
+                subtask_lines[-1] += "\n\n- Agent 定义：%s（%s）" % (
+                    definition['name'], 'v%s' % definition['version'] if definition.get('version') else '任务内临时定义')
         role_rows = []
         for role in ROLE_NAMES:
             setting = task["role_settings"].get(role, {})

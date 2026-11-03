@@ -1,6 +1,9 @@
 export function createInitialState() {
   return {
     tasks: [],
+    agents: [],
+    agentDraft: null,
+    agentAssignment: null,
     repositories: [],
     repositoryManagement: { mode: "managed", acceptsPath: false, acceptsCloneUrl: true },
     settings: null,

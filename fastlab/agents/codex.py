@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import threading
+import tempfile
 from pathlib import Path
 
 from .core import (
@@ -18,6 +19,7 @@ from .core import (
     terminate_process,
 )
 from .planner import CodexPlanner
+from .schema import strict_output_schema
 
 
 class CodexCLIAdapter(AgentAdapter):
@@ -72,7 +74,20 @@ class CodexCLIAdapter(AgentAdapter):
         self._active = {}
         self._active_lock = threading.Lock()
 
-    def run(
+    def run(self, key, cwd, prompt, sandbox, schema=None, resume_session=None,
+            on_event=None, model=None, effort=None, skills=None, local_network=False):
+        options = dict(resume_session=resume_session, on_event=on_event, model=model,
+                       effort=effort, skills=skills, local_network=local_network)
+        if not schema:
+            return self._run(key, cwd, prompt, sandbox, **options)
+        source = (json.loads(Path(schema).read_text(encoding='utf-8'))
+                  if isinstance(schema, (str, Path)) else schema)
+        with tempfile.TemporaryDirectory(prefix='output-schema-', dir=self.runtime_dir) as folder:
+            path = Path(folder) / (Path(schema).name if isinstance(schema, (str, Path)) else 'output.schema.json')
+            path.write_text(json.dumps(strict_output_schema(source)), encoding='utf-8')
+            return self._run(key, cwd, prompt, sandbox, schema=path, **options)
+
+    def _run(
         self,
         key,
         cwd,
@@ -109,6 +124,8 @@ class CodexCLIAdapter(AgentAdapter):
                 % json.dumps(str(Path(cwd).resolve())),
             ]
         )
+        if effort:
+            security_arguments.extend(['-c', 'model_reasoning_effort=' + json.dumps(effort)])
         if resume_session:
             command = self.command_prefix + ["exec"] + security_arguments + [
                 "resume",

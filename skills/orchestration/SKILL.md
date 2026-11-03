@@ -102,8 +102,12 @@ Assign exactly one executor listed as available:
   dependencies merely to balance executor counts.
 
 Executor placement is not a claim that one model is universally better. The
-Planner must not select unavailable executors or invent executors, models,
-profiles, Skills, or nested Agents.
+Planner must not select unavailable executors or invent executors,
+models or nested execution processes. Select a supplied capability definition
+with `agentId`, or describe a task-local `temporaryAgent` using the supplied schema.
+Never use both for one subtask. Temporary definitions may contain instructions and
+Skill text, but cannot grant permissions, install tools, or launch Workers.
+FastLab validates the definition and waits for user approval before execution.
 
 ## Define acceptance evidence
 
