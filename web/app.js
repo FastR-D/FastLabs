@@ -200,14 +200,14 @@ function renderCreate() {
   main.innerHTML = `
     <section class="page-heading"><div><h2 class="page-title">创建任务</h2></div></section>
     <form class="panel task-form" id="task-form">
-      <div class="field"><label>仓库</label><select name="repositoryId" required>${available.map((item) => `<option value="${item.id}" ${item.is_default ? "selected" : ""}>${escapeHtml(item.alias)}</option>`).join("")}</select></div>
+      <div class="field"><label>仓库</label><select class="fastui-select" name="repositoryId" required>${available.map((item) => `<option value="${item.id}" ${item.is_default ? "selected" : ""}>${escapeHtml(item.alias)}</option>`).join("")}</select></div>
       <div class="field"><label>目录 <span class="field-hint">可选</span></label><input name="workingSubdir" placeholder="例如 web"><span class="field-note">仓库内的相对目录</span></div>
-      <div class="field full"><label>标题 <span class="field-hint">可选</span></label><input name="title" maxlength="80" placeholder="一句话标题"></div>
-      <div class="field full"><label>目标</label><textarea name="goal" rows="7" required placeholder="要完成什么？"></textarea></div>
-      <div class="field full"><label>限制 <span class="field-hint">可选</span></label><textarea name="constraints" rows="3" placeholder="不能修改什么？"></textarea></div>
+      <div class="field full"><label>标题 <span class="field-hint">可选</span></label><input class="fastui-input" name="title" maxlength="80" placeholder="一句话标题"></div>
+      <div class="field full"><label>目标</label><textarea class="fastui-textarea" name="goal" rows="7" required placeholder="要完成什么？"></textarea></div>
+      <div class="field full"><label>限制 <span class="field-hint">可选</span></label><textarea class="fastui-textarea" name="constraints" rows="3" placeholder="不能修改什么？"></textarea></div>
       <div class="field"><label>并发数</label><input name="maxConcurrency" type="number" min="1" max="${state.settings?.globalConcurrency || 4}" value="${Math.min(4, state.settings?.globalConcurrency || 4)}" required></div>
       <div class="field"><label>规划工具</label><input value="${plannerLabel(planner)}" readonly></div>
-      <div class="form-actions full"><button class="primary-button" type="submit">生成计划</button></div>
+      <div class="form-actions full"><button class="primary-button fastui-button fastui-button--primary" type="submit">生成计划</button></div>
     </form>`;
 }
 

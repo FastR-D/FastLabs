@@ -1,0 +1,2 @@
+# Preserve supplier bytes/CRLF metadata while retaining real whitespace checks.
+web/fastui/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

@@ -1,0 +1,61 @@
+/* Every appearance rule is explicitly opted into by a fastui class. No reset. */
+.fastui-button, .fastui-input, .fastui-textarea, .fastui-select {
+  box-sizing: border-box;
+  font-family: var(--fastui-font);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: var(--fastui-height-md);
+  padding: 7px 10px;
+  border: 1px solid var(--fastui-border-strong);
+  border-radius: var(--fastui-radius-control);
+  background: var(--fastui-surface);
+  color: var(--fastui-text);
+  max-width: 100%;
+  min-width: 0;
+  color-scheme: var(--fastui-color-scheme);
+}
+.fastui-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 500; text-decoration: none; }
+.fastui-button--sm, .fastui-input--sm, .fastui-select--sm { min-height: var(--fastui-height-sm); padding: 4px 8px; font-size: 12px; }
+.fastui-button--xs, .fastui-input--xs, .fastui-select--xs { min-height: var(--fastui-height-xs); padding: 1px 6px; font-size: 12px; }
+.fastui-button:hover:not(:disabled) { background: var(--fastui-selected); }
+.fastui-button--primary { background: var(--fastui-primary); border-color: var(--fastui-primary); color: var(--fastui-on-primary); }
+.fastui-button--primary:hover:not(:disabled) { background: var(--fastui-primary-hover); }
+.fastui-button--danger { background: var(--fastui-danger-fill); border-color: var(--fastui-danger-fill); color: var(--fastui-on-primary); }
+.fastui-button--danger:hover:not(:disabled) { filter: brightness(.9); background: var(--fastui-danger-fill); }
+.fastui-button--quiet, .fastui-button--icon, .fastui-button--navigation { background: transparent; border-color: transparent; }
+.fastui-button--icon { aspect-ratio: 1; padding: 5px; }
+.fastui-button--navigation { border-radius: 0; }
+.fastui-button[aria-pressed=true], .fastui-button[aria-selected=true] { box-shadow: inset 0 -2px var(--fastui-focus); }
+.fastui-button:disabled, .fastui-input:disabled, .fastui-textarea:disabled, .fastui-select:disabled { opacity: .6; cursor: not-allowed; }
+.fastui-button:focus-visible, .fastui-input:focus-visible, .fastui-textarea:focus-visible, .fastui-select:focus-visible, .fastui-link:focus-visible, .fastui-disclosure-trigger:focus-visible { outline: 2px solid var(--fastui-focus); outline-offset: 2px; }
+.fastui-input::placeholder, .fastui-textarea::placeholder { color: var(--fastui-muted); }
+.fastui-input[aria-invalid=true], .fastui-textarea[aria-invalid=true] { border-color: var(--fastui-danger); }
+.fastui-input[type=checkbox], .fastui-input[type=radio], .fastui-input[type=range] { min-height: auto; padding: 0; accent-color: var(--fastui-primary); }
+.fastui-textarea { resize: vertical; }
+.fastui-field { display: grid; gap: 6px; color: var(--fastui-secondary); font: 13px/1.5 var(--fastui-font); }
+.fastui-fieldset { border: 1px solid var(--fastui-border); border-radius: var(--fastui-radius-panel); min-width: 0; padding: 16px; }
+.fastui-legend { color: var(--fastui-secondary); padding: 0 4px; }
+.fastui-heading { color: var(--fastui-text); font-weight: 600; }
+.fastui-link { color: var(--fastui-focus); text-underline-offset: 3px; }
+.fastui-progress { accent-color: var(--fastui-primary); }
+.fastui-table { border-collapse: collapse; text-align: left; }
+.fastui-table :where(th, td) { padding: 12px; border-bottom: 1px solid var(--fastui-border); }
+.fastui-table th { background: var(--fastui-raised); font-weight: 600; }
+.fastui-disclosure-trigger { padding: 5px 8px; cursor: pointer; }
+.fastui-dialog { box-sizing: border-box; width: min(620px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 0; border: 1px solid var(--fastui-border); border-radius: var(--fastui-radius-panel); background: var(--fastui-surface); color: var(--fastui-text); font: 14px/1.5 var(--fastui-font); box-shadow: 0 16px 48px #0004; }
+.fastui-dialog--lg { width: min(880px, calc(100% - 32px)); }
+.fastui-dialog--xl { width: min(1100px, calc(100% - 32px)); }
+.fastui-dialog::backdrop { background: var(--fastui-overlay); }
+.fastui-dialog > :where(header, footer), .fastui-modal-body { padding: 20px 24px; }
+.fastui-dialog > header { border-bottom: 1px solid var(--fastui-border); }
+.fastui-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--fastui-border); }
+.fastui-modal-body { display: grid; gap: 16px; }
+.fastui-alert, .fastui-badge, .fastui-empty, .fastui-loading { font-family: var(--fastui-font); color: var(--fastui-text); }
+.fastui-alert { border: 1px solid var(--fastui-border); border-left: 3px solid var(--fastui-tone, var(--fastui-focus)); border-radius: var(--fastui-radius-control); padding: 12px 16px; background: var(--fastui-surface); }
+.fastui-badge { display: inline-block; border: 1px solid currentColor; color: var(--fastui-tone, var(--fastui-focus)); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+.fastui-tone-success { --fastui-tone: var(--fastui-success); }
+.fastui-tone-warning { --fastui-tone: var(--fastui-warning); }
+.fastui-tone-danger { --fastui-tone: var(--fastui-danger); }
+.fastui-empty { padding: 24px; text-align: center; }
+.fastui-empty > h2 { font-size: 16px; }
+.fastui-loading { display: inline-flex; align-items: center; gap: 8px; }

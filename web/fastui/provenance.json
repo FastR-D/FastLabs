@@ -1,0 +1,12 @@
+{
+  "package": "@fastrd/ui-foundation",
+  "version": "0.1.0",
+  "url": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz",
+  "sha256": "5c87e8f60c2c349c98b17349396a4f6ac335de30f92d0d0b8ec2171b951ebd9e",
+  "files": {
+    "tokens.css": "fadf2cf99aa54150ff65776032c4f61b007ebe47a0051723f81afac0b397de38",
+    "controls.css": "f34fa4d48fbae9dcbf22fc7fcb1718e2b1a5cb33c36bc287805fd49b61cecbc4",
+    "color-mode.js": "596e123cf27bf280dec4cabafe98dfbcf780fbef546763c8c27a0c28e6c52f99"
+  },
+  "generated_by": "python web/supply_fastui.py"
+}
