@@ -1,0 +1,2 @@
+# Optional FastCAS integration; requires Python >=3.10.
+fastcas-sdk==0.1.2
