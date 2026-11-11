@@ -770,6 +770,35 @@ class FastLabIntegrationTests(unittest.TestCase):
         self.assertTrue(branch_exists(self.repo, "user-keep"))
         self.assertFalse((self.data / "worktrees" / task["id"]).exists())
 
+    def test_cancel_awaiting_approval_does_not_start_work(self):
+        task = self.prepare_task()
+        finish_entered = threading.Event()
+        release_finish = threading.Event()
+        original_finish = self.app._finish_cancel
+
+        def blocked_finish(snapshot):
+            finish_entered.set()
+            self.assertTrue(release_finish.wait(5))
+            return original_finish(snapshot)
+
+        with patch.object(self.app, "_finish_cancel", side_effect=blocked_finish):
+            returned = self.app.cancel_task(task["id"])
+            self.assertEqual(returned["status"], "awaiting_approval")
+            self.assertTrue(returned["cancel_requested"])
+            self.assertTrue(finish_entered.wait(5))
+            with self.assertRaises(ValueError):
+                self.app.start_task(task["id"])
+            release_finish.set()
+
+        worker_calls = [
+            call for call in self.adapter.calls
+            if call["key"].startswith("subtask-%s-" % task["id"])
+        ]
+        self.assertEqual(worker_calls, [])
+        self.assertFalse((self.data / "worktrees" / task["id"]).exists())
+        cancelled = self.wait_for_status(task["id"], "cancelled")
+        self.assertTrue(all(item["status"] == "cancelled" for item in cancelled["subtasks"]))
+
     def test_failure_conflict_and_retry_preserve_main(self):
         task = self.prepare_task("CONFLICT")
         base = git(self.repo, "rev-parse", "main")
@@ -1267,6 +1296,9 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(parse_agent_timeout("12.5"), 12.5)
         with self.assertRaisesRegex(ValueError, "大于等于 0"):
             parse_agent_timeout("-1")
+        for raw in ("nan", "NaN", "inf", "Infinity", "1e9999"):
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, "有限"):
+                parse_agent_timeout(raw)
 
     def test_cycle_and_unknown_executor_are_rejected(self):
         cycle = {

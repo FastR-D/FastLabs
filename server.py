@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import mimetypes
 import os
 import re
@@ -221,8 +222,8 @@ def parse_agent_timeout(value):
         timeout = float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError("FASTLAB_AGENT_TIMEOUT 必须是大于等于 0 的秒数。") from exc
-    if timeout < 0:
-        raise ValueError("FASTLAB_AGENT_TIMEOUT 必须是大于等于 0 的秒数。")
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ValueError("FASTLAB_AGENT_TIMEOUT 必须是有限且大于等于 0 的秒数。")
     return timeout
 
 
@@ -2068,6 +2069,8 @@ class FastLab:
 
     def _start_task_locked(self, task_id):
         task = self.require_task(task_id)
+        if task["cancel_requested"]:
+            raise ValueError("任务已请求取消。")
         if task["status"] != "awaiting_approval":
             raise ValueError("任务尚未准备好或已经开始。")
         for subtask in task["subtasks"]:
@@ -2986,7 +2989,7 @@ class FastLab:
 
     def _cancel_task_locked(self, task_id):
         task = self.require_task(task_id)
-        if task["status"] not in {"planning", "running", "verifying"}:
+        if task["status"] not in {"planning", "awaiting_approval", "running", "verifying"}:
             raise ValueError("当前任务不在运行。")
         self.store.update_task(task_id, cancel_requested=1)
         self.agent_gate.wake_all()
