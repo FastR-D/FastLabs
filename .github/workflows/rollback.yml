@@ -1,0 +1,26 @@
+name: Roll back FastLabs
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected-release:
+        description: Exact active FastDeploy release ID from the deployment log
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    if: github.ref == 'refs/heads/main'
+    uses: FastR-D/FastDeploy/.github/workflows/rollback.yml@fb455c57d06cc7d8d9bd3b3fb505e65270caa260
+    with:
+      app: fastlabs
+      expected-release: ${{ inputs.expected-release }}
+    secrets:
+      SSH_HOST: ${{ secrets.FASTRD_SSH_HOST }}
+      SSH_PORT: ${{ secrets.FASTRD_SSH_PORT }}
+      SSH_USER: ${{ secrets.FASTRD_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.FASTRD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.FASTRD_SSH_KNOWN_HOSTS }}
