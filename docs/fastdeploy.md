@@ -4,7 +4,7 @@
 
 普通运行参数直接写在该 workflow 的 `runtime-env`，使用字面 `KEY=value`，不要加 shell 引号。敏感值用该文件 `runtime-secrets` 中的同名仓库 Secrets，使用 `toJSON` 保留特殊字符。SSH 五项来自 FastR-D 组织的 `FASTRD_SSH_*` Secrets；请勿把凭证写入 YAML 或构建产物。
 
-构建 job 上传同一次运行的 `release.tar.gz` 和 `manifest.json`。FastDeploy 和打包器均固定到完整提交 `fb455c57d06cc7d8d9bd3b3fb505e65270caa260`，服务器不拉源码或重新安装依赖。代码相对路径由 [FastDeploy 应用配置](https://github.com/FastR-D/FastDeploy/blob/fb455c57d06cc7d8d9bd3b3fb505e65270caa260/config/apps.json) 注入，业务数据使用其中记录的原持久化路径。
+构建 job 上传同一次运行的 `release.tar.gz` 和 `manifest.json`。FastDeploy 和打包器均固定到完整提交 `cc223a0b83b0ef2389974dd70a4b74148cd1af87`，服务器不拉源码或重新安装依赖。代码相对路径由 [FastDeploy 应用配置](https://github.com/FastR-D/FastDeploy/blob/cc223a0b83b0ef2389974dd70a4b74148cd1af87/config/apps.json) 注入，业务数据使用其中记录的原持久化路径。
 
 发布示例（版本号每次必须唯一）：
 

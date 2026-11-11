@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: FastR-D/FastDeploy
-          ref: fb455c57d06cc7d8d9bd3b3fb505e65270caa260
+          ref: cc223a0b83b0ef2389974dd70a4b74148cd1af87
           path: .fastdeploy-tools
           persist-credentials: false
       - name: Package the tested runtime
@@ -46,7 +46,7 @@ jobs:
   deploy:
     needs: validate
     if: startsWith(github.ref, 'refs/tags/v')
-    uses: FastR-D/FastDeploy/.github/workflows/deploy.yml@fb455c57d06cc7d8d9bd3b3fb505e65270caa260
+    uses: FastR-D/FastDeploy/.github/workflows/deploy.yml@cc223a0b83b0ef2389974dd70a4b74148cd1af87
     with:
       app: fastlabs
       artifact-name: release-${{ github.sha }}
