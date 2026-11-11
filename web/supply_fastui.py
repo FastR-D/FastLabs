@@ -7,9 +7,9 @@ from pathlib import Path
 import tarfile
 from urllib.request import urlopen
 
-VERSION = "0.1.0"
-SHA256 = "5c87e8f60c2c349c98b17349396a4f6ac335de30f92d0d0b8ec2171b951ebd9e"
-URL = f"https://github.com/FastR-D/FastUI/releases/download/v{VERSION}/fastrd-ui-foundation-{VERSION}.tgz"
+VERSION = "0.1.2"
+SHA256 = "c3dabbad16980242f66db07619b161889d0ee2492daaa4aaddee1583bc7bcd0b"
+URL = "https://registry.npmjs.org/@fastrd/ui-foundation/-/ui-foundation-0.1.2.tgz"
 
 
 def supply(artifact=None):

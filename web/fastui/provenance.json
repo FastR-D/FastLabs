@@ -1,8 +1,8 @@
 {
   "package": "@fastrd/ui-foundation",
-  "version": "0.1.0",
-  "url": "https://github.com/FastR-D/FastUI/releases/download/v0.1.0/fastrd-ui-foundation-0.1.0.tgz",
-  "sha256": "5c87e8f60c2c349c98b17349396a4f6ac335de30f92d0d0b8ec2171b951ebd9e",
+  "version": "0.1.2",
+  "url": "https://registry.npmjs.org/@fastrd/ui-foundation/-/ui-foundation-0.1.2.tgz",
+  "sha256": "c3dabbad16980242f66db07619b161889d0ee2492daaa4aaddee1583bc7bcd0b",
   "files": {
     "tokens.css": "fadf2cf99aa54150ff65776032c4f61b007ebe47a0051723f81afac0b397de38",
     "controls.css": "f34fa4d48fbae9dcbf22fc7fcb1718e2b1a5cb33c36bc287805fd49b61cecbc4",
