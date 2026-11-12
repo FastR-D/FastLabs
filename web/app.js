@@ -46,7 +46,7 @@ function logPresentation(event) {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.method && options.method !== "GET" && state.fastcas?.csrf ? { "X-CSRF-Token": state.fastcas.csrf } : {}), ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", ...(options.method && options.method !== "GET" && (window.fastlabAccount?.csrf || state.fastcas?.csrf) ? { "X-CSRF-Token": window.fastlabAccount?.csrf || state.fastcas.csrf } : {}), ...(options.headers || {}) },
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -178,7 +178,7 @@ function renderHome() {
       <div><h2 class="page-title">任务</h2></div>
       <div class="page-actions">
         <button class="primary-button" type="button" data-action="new-task" ${ready ? "" : "disabled"}>创建任务</button>
-        ${ready ? "" : '<button class="quiet-button" type="button" data-action="settings">添加仓库</button>'}
+        ${ready || (window.fastlabAccount && window.fastlabAccount.role !== 'admin') ? "" : '<button class="quiet-button" type="button" data-action="settings">添加仓库</button>'}
       </div>
     </section>
     <section class="metric-grid">
@@ -194,7 +194,7 @@ function renderCreate() {
   const planner = state.settings?.planner || {};
   const available = state.repositories.filter((item) => item.available);
   if (!available.length) {
-    main.innerHTML = '<section class="empty-state"><h2>没有可用仓库</h2><button class="primary-button" data-action="settings">添加仓库</button></section>';
+    main.innerHTML = '<section class="empty-state"><h2>没有可用仓库</h2>' + (window.fastlabAccount && window.fastlabAccount.role !== 'admin' ? '<p>请联系管理员添加仓库。</p>' : '<button class="primary-button" data-action="settings">添加仓库</button>') + '</section>';
     return;
   }
   main.innerHTML = `
@@ -631,4 +631,4 @@ async function start() {
   }
 }
 
-start();
+window.fastlabAccountsReady.then(ready => { if (ready) start(); });

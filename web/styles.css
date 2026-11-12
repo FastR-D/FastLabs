@@ -315,3 +315,35 @@ details.panel > h4 { margin: 20px 24px 8px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+/* Hosted account screens */
+.accounts-login { max-width: 440px; margin: 8vh auto; padding: 32px; background: var(--fastui-surface, #fff); border-radius: 20px; }
+.account-form { display: grid; gap: 16px; margin-top: 20px; }
+.account-form label { display: grid; gap: 6px; }
+.accounts-dialog { width: min(900px, 94vw); max-height: 90vh; overflow: auto; padding: 24px; border: 1px solid #ccc; border-radius: 18px; }
+.accounts-dialog::backdrop { background: #0006; }
+.accounts-dialog header, .account-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.accounts-dialog header { justify-content: space-between; }
+.accounts-dialog table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+.accounts-dialog th, .accounts-dialog td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+.account-error { color: #b42318; }
+.app-shell[hidden] { display: none; }
+.app-shell[hidden], [data-action="settings"][hidden] { display: none; }
+.accounts-login input, .accounts-dialog input, .accounts-dialog select {
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--fastui-border);
+  border-radius: 6px;
+  background: var(--fastui-surface);
+  color: var(--fastui-text);
+  font: inherit;
+}
+.account-controls button, .accounts-dialog td button, .accounts-dialog [data-delete] {
+  padding: 8px 12px;
+  border: 1px solid var(--fastui-border);
+  border-radius: 6px;
+  background: var(--fastui-surface);
+  color: var(--fastui-text);
+  font: inherit;
+  cursor: pointer;
+}

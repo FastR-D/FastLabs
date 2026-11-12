@@ -38,6 +38,7 @@ from agent_adapter import (
 from feishu_gateway import FeishuGateway
 from feishu_help import help_payload as feishu_help_payload
 from fastcas_pairing import FastCASPairing
+from web_accounts import WebAccounts
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -939,6 +940,7 @@ class FastLab:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.data_dir / "fastlab.db")
         self.fastcas_pairing = FastCASPairing(self.store)
+        self.web_accounts = WebAccounts(self.store)
         default_feishu_conversation = os.environ.get("FASTLAB_FEISHU_DEFAULT_CHAT_ID", "").strip()
         if default_feishu_conversation:
             self.store.set_setting("feishu.defaultConversation", default_feishu_conversation)
@@ -3703,6 +3705,8 @@ class FastLabHandler(BaseHTTPRequestHandler):
     server_version = "FastLab/0.1"
 
     def local_http_boundary(self, mutation=False):
+        if self.app.web_accounts.enabled:
+            return self.app.web_accounts.guard(self, mutation)
         from http.cookies import SimpleCookie
         host = self.headers.get("Host", "")
         try:
@@ -3734,8 +3738,13 @@ class FastLabHandler(BaseHTTPRequestHandler):
             if not self.local_http_boundary():
                 return
             path = unquote(urlparse(self.path).path)
+            if path == "/api/auth/info":
+                return self.json_response(200, {"enabled": False, "registration": False})
             if path == "/api/fastcas/status":
                 result = self.app.fastcas_pairing.status()
+                if self.app.web_accounts.enabled:
+                    result["csrf"] = self.account["csrf"]
+                    return self.json_response(200, result)
                 result["csrf"] = self.app.fastcas_pairing.csrf
                 return self.json_response(200, result, cookie="fastlab_csrf=" + self.app.fastcas_pairing.csrf + "; HttpOnly; SameSite=Strict; Path=/api")
             if path == "/api/health":
@@ -3747,7 +3756,10 @@ class FastLabHandler(BaseHTTPRequestHandler):
             if path == "/api/settings/executors":
                 return self.json_response(200, self.app.executor_settings())
             if path == "/api/tasks":
-                return self.json_response(200, {"tasks": self.app.list_payload()})
+                tasks = self.app.list_payload()
+                if self.app.web_accounts.enabled:
+                    tasks = self.app.web_accounts.visible_tasks(self.account, tasks)
+                return self.json_response(200, {"tasks": tasks})
             match = re.fullmatch(r"/api/tasks/([a-f0-9]+)", path)
             if match:
                 return self.json_response(200, self.app.task_payload(match.group(1)))
@@ -3777,6 +3789,9 @@ class FastLabHandler(BaseHTTPRequestHandler):
                     return self.json_response(200, pairing.unlink())
                 return self.json_response(404, {"error": "接口不存在。"})
             if path == "/api/tasks":
+                if self.app.web_accounts.enabled and self.account['role'] != 'admin':
+                    if not body.get('repositoryId') or body.get('workspace'):
+                        return self.json_response(403, {"error": "请选择管理员登记的仓库"})
                 task = self.app.create_task(
                     body.get("title"),
                     body.get("goal"),
@@ -3930,6 +3945,9 @@ class FastLabHandler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def json_response(self, status, payload, cookie=None):
+        if (self.app.web_accounts.enabled and getattr(self, 'account', None) and self.command == 'POST'
+                and urlparse(self.path).path.startswith('/api/tasks') and 200 <= status < 300):
+            self.app.web_accounts.own_task(self.account, payload)
         encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

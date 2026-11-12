@@ -146,7 +146,7 @@ class PairingTests(unittest.TestCase):
             self.assertFalse(self.pairing.credential_path.exists())
 
     def test_local_host_origin_and_csrf_required(self):
-        fake = types.SimpleNamespace(fastcas_pairing=self.pairing)
+        fake = types.SimpleNamespace(fastcas_pairing=self.pairing, web_accounts=types.SimpleNamespace(enabled=False))
         FastLabHandler.app = fake
         server = ThreadingHTTPServer(("127.0.0.1", 0), FastLabHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -1,0 +1,13 @@
+{
+  "id": "fastlabs-web",
+  "name": "FastLabs",
+  "public": false,
+  "development": false,
+  "redirect_uris": ["https://labs.fastrd.io/api/auth/fastcas/callback"],
+  "post_logout_redirect_uris": ["https://labs.fastrd.io/"],
+  "scopes": ["openid", "profile", "email"],
+  "resources": [],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "events_uri": "https://labs.fastrd.io/api/auth/fastcas/events",
+  "backchannel_logout_uri": "https://labs.fastrd.io/api/auth/fastcas/backchannel-logout"
+}

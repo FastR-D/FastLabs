@@ -24,7 +24,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --target vendor -r requirements.txt -r requirements-fastcas.txt
-      - run: python -m unittest discover -s tests -v
+      - run: cp web_accounts.py vendor/web_accounts.py
+      - run: python -m pip install pytest
+      - run: python -m pytest tests -q
         env:
           PYTHONPATH: vendor
       - name: Checkout pinned FastDeploy packager
@@ -54,10 +56,16 @@ jobs:
       # Code-relative paths are supplied by the trusted FastDeploy server profile.
       runtime-env: |
         FASTLAB_CODEX_BIN=/home/dev/.npm-global/bin/codex
+        FASTLAB_PUBLIC_URL=https://labs.fastrd.io
+        FASTLAB_WEB_FASTCAS_ISSUER=https://cas.fastrd.io
+        FASTLAB_WEB_FASTCAS_CLIENT_ID=fastlabs-web
     secrets:
       SSH_HOST: ${{ secrets.FASTRD_SSH_HOST }}
       SSH_PORT: ${{ secrets.FASTRD_SSH_PORT }}
       SSH_USER: ${{ secrets.FASTRD_SSH_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.FASTRD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.FASTRD_SSH_KNOWN_HOSTS }}
-      runtime-secrets: '{}'
+      runtime-secrets: |
+        {
+          "FASTLAB_WEB_FASTCAS_CLIENT_SECRET": ${{ toJSON(secrets.FASTLAB_WEB_FASTCAS_CLIENT_SECRET) }}
+        }
